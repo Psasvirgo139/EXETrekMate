@@ -1,7 +1,9 @@
 package com.trekmate.app.core.network.sse
 
+import android.util.Log
 import com.google.gson.Gson
 import com.trekmate.app.core.network.dto.MemberListResponse
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -14,6 +16,8 @@ import okhttp3.Request
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 import javax.inject.Singleton
+
+private const val TAG = "TourSseClient"
 
 private const val RECONNECT_DELAY_MS = 5_000L
 
@@ -36,22 +40,28 @@ class TourSseClient @Inject constructor(
      * 4. Stops when the collecting coroutine is cancelled (tour cleared / app closed)
      */
     fun eventFlow(tourId: String): Flow<TourSseEvent> = flow {
+        Log.i(TAG, "eventFlow started for tourId=$tourId")
         while (currentCoroutineContext().isActive) {
             try {
+                val url = "${baseUrl}exe/tours/$tourId/events"
+                Log.d(TAG, "Connecting to SSE: $url")
                 val request = Request.Builder()
-                    .url("${baseUrl}exe/tours/$tourId/events")
+                    .url(url)
                     .header("Accept", "text/event-stream")
                     .header("Cache-Control", "no-cache")
                     .build()
 
                 client.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
+                        Log.w(TAG, "SSE connect failed: HTTP ${response.code}")
                         emit(TourSseEvent.Disconnected)
                         delay(RECONNECT_DELAY_MS)
                         return@use
                     }
+                    Log.i(TAG, "SSE connected: HTTP ${response.code}")
 
                     val source = response.body?.source() ?: run {
+                        Log.w(TAG, "SSE body is null")
                         emit(TourSseEvent.Disconnected)
                         delay(RECONNECT_DELAY_MS)
                         return@use
@@ -76,15 +86,25 @@ class TourSseClient @Inject constructor(
                             line.isEmpty() && dataBuffer.isNotEmpty() -> {
                                 val data = dataBuffer.toString()
                                 dataBuffer.clear()
-                                dispatchEvent(eventName, data)?.let { emit(it) }
+                                Log.d(TAG, "SSE event: name='$eventName' data='${data.take(200)}'")
+                                val event = dispatchEvent(eventName, data)
+                                if (event == null) {
+                                    Log.w(TAG, "dispatchEvent returned null for name='$eventName'")
+                                } else {
+                                    emit(event)
+                                }
                                 if (eventName == "tour_ended") return@flow
                                 eventName = ""
                             }
                         }
                     }
+                    Log.i(TAG, "SSE inner loop exited (source exhausted or cancelled)")
                 }
+            } catch (e: CancellationException) {
+                Log.d(TAG, "SSE flow cancelled")
+                throw e  // Must propagate cancellation
             } catch (e: Exception) {
-                // Network error, server restart, etc.
+                Log.w(TAG, "SSE error: ${e.javaClass.simpleName}: ${e.message}")
             }
 
             emit(TourSseEvent.Disconnected)
@@ -96,8 +116,12 @@ class TourSseClient @Inject constructor(
         when (eventName) {
             "member_update" -> runCatching {
                 val response = gson.fromJson(data, MemberListResponse::class.java)
+                Log.d(TAG, "Parsed MemberUpdate: ${response.members.size} member(s)")
                 TourSseEvent.MemberUpdate(response.members)
-            }.getOrNull()
+            }.getOrElse { e ->
+                Log.e(TAG, "Failed to parse member_update: ${e.message}")
+                null
+            }
 
             "tour_ended" -> TourSseEvent.TourEnded
 

@@ -1,5 +1,6 @@
 package com.trekmate.app.feature.tour
 
+import android.util.Log
 import com.trekmate.app.core.model.CurrentTour
 import com.trekmate.app.core.model.TourMember
 import com.trekmate.app.core.model.TourRole
@@ -90,19 +91,23 @@ class TourRepositoryImpl @Inject constructor(
 
     private fun startSse(tourId: String) {
         stopSse()
+        Log.i("TourRepo", "Starting SSE for tourId=$tourId")
         sseJob = appScope.launch {
             sseClient.eventFlow(tourId).collect { event ->
                 when (event) {
                     is TourSseEvent.MemberUpdate -> {
+                        Log.i("TourRepo", "MemberUpdate: ${event.members.size} member(s) → saving to Room")
                         memberStore.replaceMembers(event.members.toDomainList(tourId))
+                        Log.i("TourRepo", "MemberUpdate: Room updated")
                     }
                     is TourSseEvent.TourEnded -> {
+                        Log.i("TourRepo", "TourEnded: clearing local tour")
                         // Use NonCancellable so Room writes complete even though stopSse()
                         // inside clearLocalTour() will cancel this very coroutine.
                         withContext(NonCancellable) { clearLocalTour() }
                     }
                     is TourSseEvent.Disconnected -> {
-                        // Connection lost, TourSseClient will auto-retry — nothing to do here
+                        Log.d("TourRepo", "SSE disconnected — client will auto-retry")
                     }
                 }
             }
