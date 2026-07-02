@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+        Allow cleartext HTTP to the Android emulator host (10.0.2.2) for debug/dev.
+        10.0.2.2 maps to localhost on the development machine where exe-backend runs on port 8081.
+        Production traffic (HTTPS) is unaffected.
+    -->
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">10.0.2.2</domain>
+    </domain-config>
+</network-security-config>
