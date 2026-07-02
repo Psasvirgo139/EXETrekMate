@@ -16,8 +16,10 @@ import com.trekmate.app.di.ApplicationScope
 import com.trekmate.app.feature.auth.AuthRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -95,8 +97,9 @@ class TourRepositoryImpl @Inject constructor(
                         memberStore.replaceMembers(event.members.toDomainList(tourId))
                     }
                     is TourSseEvent.TourEnded -> {
-                        // Leader ended tour — clear everything and go back to Home
-                        clearLocalTour()
+                        // Use NonCancellable so Room writes complete even though stopSse()
+                        // inside clearLocalTour() will cancel this very coroutine.
+                        withContext(NonCancellable) { clearLocalTour() }
                     }
                     is TourSseEvent.Disconnected -> {
                         // Connection lost, TourSseClient will auto-retry — nothing to do here
