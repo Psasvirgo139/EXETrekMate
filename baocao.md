@@ -1,6 +1,6 @@
 # Báo Cáo Dự Án TrekMate MVP
 
-> Cập nhật lần cuối: 02/07/2026  
+> Cập nhật lần cuối: 02/07/2026 — thêm exe-backend  
 > Repository: https://github.com/Psasvirgo139/EXETrekMate  
 > Nhánh: `main`
 
@@ -146,21 +146,22 @@ EXETREKMATE/
 
 ### 3.1 Bắt Buộc Trước Khi Chạy
 
-#### ✏️ Thay đổi BASE_URL (quan trọng nhất)
+#### ✅ BASE_URL — đã cấu hình trỏ đến exe-backend
 
 File: `app/build.gradle.kts`
 
 ```kotlin
 defaultConfig {
-    // Thay URL này bằng URL backend thực của bạn (release)
+    // Production (thay URL này khi deploy)
     buildConfigField("String", "BASE_URL", "\"https://api.trekmate.dev/\"")
 }
 
 buildTypes {
     debug {
-        // Khi test với emulator: 10.0.2.2 trỏ về localhost của máy tính
-        // Khi test với điện thoại thật: thay bằng IP LAN của máy chạy backend
-        buildConfigField("String", "BASE_URL", "\"http://192.168.1.100:8080/\"")
+        // Emulator trỏ về exe-backend chạy trên localhost:8081
+        buildConfigField("String", "BASE_URL", "\"http://10.0.2.2:8081/\"")
+        // Điện thoại thật trên cùng mạng LAN: thay bằng IP máy tính, ví dụ:
+        // buildConfigField("String", "BASE_URL", "\"http://192.168.1.100:8081/\"")
     }
 }
 ```
@@ -181,18 +182,32 @@ buildTypes {
 
 ---
 
-#### ✏️ Backend API phải có các endpoints sau
+#### ✅ exe-backend — backend riêng biệt đã được tạo
 
-App Android đang gọi các endpoint này (xem `TourApiService.kt`):
+Backend nhẹ (Spring Boot + PostgreSQL) nằm ở thư mục `exe-backend/`, **hoàn toàn độc lập** với hệ thống backend cũ, chỉ phục vụ 4 API sau:
 
 | Method | Path | Request body | Response |
 |--------|------|-------------|----------|
-| `POST` | `/exe/tours` | `{ "leader_id": "..." }` | `{ "tour_id", "group_id", "join_code", "qr_payload", "leader_id" }` |
+| `POST` | `/exe/tours` | `{ "leader_id": "..." }` | `{ "tour_id", "group_id"(8 chars), "join_code"(6 chars), "qr_payload", "leader_id" }` |
 | `POST` | `/exe/tours/join` | `{ "user_id": "...", "join_code": "..." }` | `{ "tour_id", "group_id", "leader_id", "join_code", "qr_payload", "members": [...] }` |
-| `POST` | `/exe/tours/end` | `{ "tour_id": "...", "leader_id": "..." }` | `{ "success": true }` |
+| `POST` | `/exe/tours/end` | `{ "tour_id": "...", "leader_id": "..." }` | `{ "success": true, "message": "..." }` |
 | `GET` | `/exe/tours/{tourId}/members` | — | `{ "members": [{ "user_id", "is_leader" }] }` |
 
-> Nếu chưa có backend, có thể dùng **mock server** (ví dụ: MockWebServer, Postman Mock, json-server) để test luồng tour.
+**Cách chạy exe-backend:**
+
+```bash
+# 1. Tạo database (chỉ cần làm 1 lần)
+psql -U postgres -c "CREATE DATABASE exetrekmate;"
+
+# 2. Chạy backend (tự tạo bảng)
+cd exe-backend
+mvn spring-boot:run
+# Server lắng nghe tại http://localhost:8081
+```
+
+**Swagger UI để test thủ công:** http://localhost:8081/swagger-ui.html
+
+**Lưu ý `group_id`**: Chỉ 8 ký tự (`ALPHANUM`) để vừa với BLE advertisement packet 8-byte field.
 
 ---
 
