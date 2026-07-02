@@ -19,7 +19,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "BASE_URL", "\"https://api.trekmate.dev/\"")
+        buildConfigField("String", "BASE_URL", "\"https://exetrekmatebe-1.onrender.com/\"")
     }
 
     buildTypes {
@@ -31,7 +31,7 @@ android {
             )
         }
         debug {
-            buildConfigField("String", "BASE_URL", "\"http://10.0.2.2:8081/\"")
+            buildConfigField("String", "BASE_URL", "\"https://exetrekmatebe-1.onrender.com/\"")
         }
     }
 
