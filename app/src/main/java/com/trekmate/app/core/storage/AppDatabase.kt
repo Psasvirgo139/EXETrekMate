@@ -15,7 +15,7 @@ import com.trekmate.app.core.storage.entity.TourMemberEntity
         TourMemberEntity::class,
         BleObservationEntity::class
     ],
-    version = 1,
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

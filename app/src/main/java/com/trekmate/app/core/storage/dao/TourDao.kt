@@ -5,17 +5,27 @@ import com.trekmate.app.core.storage.entity.CurrentTourEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-interface TourDao {
+abstract class TourDao {
 
-    @Query("SELECT * FROM current_tour LIMIT 1")
-    fun observeCurrentTour(): Flow<CurrentTourEntity?>
+    @Query("SELECT * FROM current_tour ORDER BY createdAt DESC LIMIT 1")
+    abstract fun observeCurrentTour(): Flow<CurrentTourEntity?>
 
-    @Query("SELECT * FROM current_tour LIMIT 1")
-    suspend fun getCurrentTour(): CurrentTourEntity?
+    @Query("SELECT * FROM current_tour ORDER BY createdAt DESC LIMIT 1")
+    abstract suspend fun getCurrentTour(): CurrentTourEntity?
+
+    /**
+     * Always clear the table first so that LIMIT 1 queries never return a stale previous tour.
+     * Each device can only be in one tour at a time.
+     */
+    @Transaction
+    open suspend fun saveCurrentTour(tour: CurrentTourEntity) {
+        clearCurrentTour()
+        insertTour(tour)
+    }
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun saveCurrentTour(tour: CurrentTourEntity)
+    abstract suspend fun insertTour(tour: CurrentTourEntity)
 
     @Query("DELETE FROM current_tour")
-    suspend fun clearCurrentTour()
+    abstract suspend fun clearCurrentTour()
 }
