@@ -6,13 +6,18 @@ import com.trekmate.app.core.model.TourRole
 import com.trekmate.app.core.network.dto.CreateTourResponse
 import com.trekmate.app.core.network.dto.JoinTourResponse
 import com.trekmate.app.core.network.dto.TourMemberDto
+import com.trekmate.app.core.network.sse.TourSseClient
+import com.trekmate.app.core.network.sse.TourSseEvent
 import com.trekmate.app.core.storage.BleObservationStore
 import com.trekmate.app.core.storage.MemberStore
 import com.trekmate.app.core.storage.TourStore
 import com.trekmate.app.core.time.ClockProvider
+import com.trekmate.app.di.ApplicationScope
 import com.trekmate.app.feature.auth.AuthRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -23,8 +28,12 @@ class TourRepositoryImpl @Inject constructor(
     private val tourStore: TourStore,
     private val memberStore: MemberStore,
     private val bleObservationStore: BleObservationStore,
-    private val clock: ClockProvider
+    private val clock: ClockProvider,
+    private val sseClient: TourSseClient,
+    @ApplicationScope private val appScope: CoroutineScope
 ) : TourRepository {
+
+    private var sseJob: Job? = null
 
     override fun observeCurrentTour(): Flow<CurrentTour?> = tourStore.observeCurrentTour()
 
@@ -37,6 +46,7 @@ class TourRepositoryImpl @Inject constructor(
             tourStore.saveCurrentTour(tour)
             val leaderMember = TourMember(userId = user.userId, tourId = tour.tourId, isLeader = true)
             memberStore.replaceMembers(listOf(leaderMember))
+            startSse(tour.tourId)
             tour
         }
     }
@@ -47,6 +57,7 @@ class TourRepositoryImpl @Inject constructor(
             val tour = dto.toDomain(TourRole.MEMBER, clock.currentTimeMillis())
             tourStore.saveCurrentTour(tour)
             memberStore.replaceMembers(dto.members.toDomainList(tour.tourId))
+            startSse(tour.tourId)
             tour
         }
     }
@@ -60,6 +71,7 @@ class TourRepositoryImpl @Inject constructor(
     }
 
     override suspend fun clearLocalTour() {
+        stopSse()
         tourStore.clearCurrentTour()
         memberStore.clearMembers()
         bleObservationStore.clearObservations()
@@ -71,6 +83,35 @@ class TourRepositoryImpl @Inject constructor(
             memberStore.replaceMembers(dtos.toDomainList(tour.tourId))
         }
     }
+
+    // ── SSE lifecycle ────────────────────────────────────────────────────────
+
+    private fun startSse(tourId: String) {
+        stopSse()
+        sseJob = appScope.launch {
+            sseClient.eventFlow(tourId).collect { event ->
+                when (event) {
+                    is TourSseEvent.MemberUpdate -> {
+                        memberStore.replaceMembers(event.members.toDomainList(tourId))
+                    }
+                    is TourSseEvent.TourEnded -> {
+                        // Leader ended tour — clear everything and go back to Home
+                        clearLocalTour()
+                    }
+                    is TourSseEvent.Disconnected -> {
+                        // Connection lost, TourSseClient will auto-retry — nothing to do here
+                    }
+                }
+            }
+        }
+    }
+
+    private fun stopSse() {
+        sseJob?.cancel()
+        sseJob = null
+    }
+
+    // ── Mapping helpers ──────────────────────────────────────────────────────
 
     private fun CreateTourResponse.toDomain(role: TourRole, createdAt: Long) = CurrentTour(
         tourId = tourId,

@@ -1,5 +1,6 @@
 package com.trekmate.app.di
 
+import com.google.gson.Gson
 import com.trekmate.app.BuildConfig
 import com.trekmate.app.core.network.TourApiService
 import com.trekmate.app.feature.tour.ApiSyncRepository
@@ -9,6 +10,8 @@ import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.SupervisorJob
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
@@ -35,17 +38,31 @@ object NetworkModule {
 
     @Provides
     @Singleton
-    fun provideRetrofit(client: OkHttpClient): Retrofit =
+    fun provideGson(): Gson = Gson()
+
+    @Provides
+    @Singleton
+    fun provideBaseUrl(): String = BuildConfig.BASE_URL
+
+    @Provides
+    @Singleton
+    fun provideRetrofit(client: OkHttpClient, gson: Gson): Retrofit =
         Retrofit.Builder()
             .baseUrl(BuildConfig.BASE_URL)
             .client(client)
-            .addConverterFactory(GsonConverterFactory.create())
+            .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
 
     @Provides
     @Singleton
     fun provideTourApiService(retrofit: Retrofit): TourApiService =
         retrofit.create(TourApiService::class.java)
+
+    @Provides
+    @Singleton
+    @ApplicationScope
+    fun provideApplicationScope(): CoroutineScope =
+        CoroutineScope(SupervisorJob())
 }
 
 @Module
