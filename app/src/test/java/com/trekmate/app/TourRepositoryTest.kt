@@ -5,6 +5,8 @@ import com.trekmate.app.core.model.CurrentUser
 import com.trekmate.app.core.model.TourRole
 import com.trekmate.app.core.network.dto.CreateTourResponse
 import com.trekmate.app.core.network.dto.JoinTourResponse
+import com.trekmate.app.core.network.sse.TourSseClient
+import com.trekmate.app.core.network.sse.TourSseEvent
 import com.trekmate.app.core.storage.BleObservationStore
 import com.trekmate.app.core.storage.MemberStore
 import com.trekmate.app.core.storage.TourStore
@@ -13,7 +15,8 @@ import com.trekmate.app.feature.auth.AuthRepository
 import com.trekmate.app.feature.tour.ApiSyncRepository
 import com.trekmate.app.feature.tour.TourRepositoryImpl
 import io.mockk.*
-import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.*
 import org.junit.Test
@@ -26,8 +29,14 @@ class TourRepositoryTest {
     private val memberStore = mockk<MemberStore>(relaxed = true)
     private val bleStore = mockk<BleObservationStore>(relaxed = true)
     private val clock = mockk<ClockProvider>()
+    private val sseClient = mockk<TourSseClient> {
+        every { eventFlow(any()) } returns emptyFlow()
+    }
+    private val testScope = TestScope()
 
-    private val repo = TourRepositoryImpl(authRepo, apiSync, tourStore, memberStore, bleStore, clock)
+    private val repo = TourRepositoryImpl(
+        authRepo, apiSync, tourStore, memberStore, bleStore, clock, sseClient, testScope
+    )
 
     private val testUser = CurrentUser("user123", null, 1000L)
 
