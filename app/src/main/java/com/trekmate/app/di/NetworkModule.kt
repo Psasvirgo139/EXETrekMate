@@ -3,6 +3,7 @@ package com.trekmate.app.di
 import com.google.gson.Gson
 import com.trekmate.app.BuildConfig
 import com.trekmate.app.core.network.TourApiService
+import com.trekmate.app.core.network.ws.TourWebSocketClient
 import com.trekmate.app.feature.tour.ApiSyncRepository
 import com.trekmate.app.feature.tour.ApiSyncRepositoryImpl
 import dagger.Binds
@@ -63,6 +64,14 @@ object NetworkModule {
     @ApplicationScope
     fun provideApplicationScope(): CoroutineScope =
         CoroutineScope(SupervisorJob())
+
+    @Provides
+    @Singleton
+    fun provideTourWebSocketClient(
+        client: OkHttpClient,
+        gson: Gson,
+        baseUrl: String
+    ): TourWebSocketClient = TourWebSocketClient(client, gson, baseUrl)
 }
 
 @Module

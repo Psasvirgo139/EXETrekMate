@@ -7,8 +7,8 @@ import com.trekmate.app.core.model.TourRole
 import com.trekmate.app.core.network.dto.CreateTourResponse
 import com.trekmate.app.core.network.dto.JoinTourResponse
 import com.trekmate.app.core.network.dto.TourMemberDto
-import com.trekmate.app.core.network.sse.TourSseClient
 import com.trekmate.app.core.network.sse.TourSseEvent
+import com.trekmate.app.core.network.ws.TourWebSocketClient
 import com.trekmate.app.core.storage.BleObservationStore
 import com.trekmate.app.core.storage.MemberStore
 import com.trekmate.app.core.storage.TourStore
@@ -32,7 +32,7 @@ class TourRepositoryImpl @Inject constructor(
     private val memberStore: MemberStore,
     private val bleObservationStore: BleObservationStore,
     private val clock: ClockProvider,
-    private val sseClient: TourSseClient,
+    private val sseClient: TourWebSocketClient,
     @ApplicationScope private val appScope: CoroutineScope
 ) : TourRepository {
 

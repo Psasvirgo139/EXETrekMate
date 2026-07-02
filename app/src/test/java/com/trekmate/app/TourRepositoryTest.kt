@@ -5,8 +5,8 @@ import com.trekmate.app.core.model.CurrentUser
 import com.trekmate.app.core.model.TourRole
 import com.trekmate.app.core.network.dto.CreateTourResponse
 import com.trekmate.app.core.network.dto.JoinTourResponse
-import com.trekmate.app.core.network.sse.TourSseClient
 import com.trekmate.app.core.network.sse.TourSseEvent
+import com.trekmate.app.core.network.ws.TourWebSocketClient
 import com.trekmate.app.core.storage.BleObservationStore
 import com.trekmate.app.core.storage.MemberStore
 import com.trekmate.app.core.storage.TourStore
@@ -29,7 +29,7 @@ class TourRepositoryTest {
     private val memberStore = mockk<MemberStore>(relaxed = true)
     private val bleStore = mockk<BleObservationStore>(relaxed = true)
     private val clock = mockk<ClockProvider>()
-    private val sseClient = mockk<TourSseClient> {
+    private val sseClient = mockk<TourWebSocketClient> {
         every { eventFlow(any()) } returns emptyFlow()
     }
     private val testScope = TestScope()
