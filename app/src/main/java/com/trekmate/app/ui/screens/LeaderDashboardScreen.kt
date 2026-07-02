@@ -164,7 +164,7 @@ private fun LostAlert(lostCount: Int) {
 }
 
 @Composable
-private fun MemberRow(
+internal fun MemberRow(
     userId: String,
     isLeader: Boolean,
     presence: MemberPresence?,
