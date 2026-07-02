@@ -2,6 +2,7 @@ package com.trekmate.app.core.network.sse
 
 import com.google.gson.Gson
 import com.trekmate.app.core.network.dto.MemberListResponse
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -35,7 +36,7 @@ class TourSseClient @Inject constructor(
      * 4. Stops when the collecting coroutine is cancelled (tour cleared / app closed)
      */
     fun eventFlow(tourId: String): Flow<TourSseEvent> = flow {
-        while (isActive) {
+        while (currentCoroutineContext().isActive) {
             try {
                 val request = Request.Builder()
                     .url("${baseUrl}exe/tours/$tourId/events")
@@ -59,7 +60,7 @@ class TourSseClient @Inject constructor(
                     var eventName = ""
                     val dataBuffer = StringBuilder()
 
-                    while (isActive && !source.exhausted()) {
+                    while (currentCoroutineContext().isActive && !source.exhausted()) {
                         val line = source.readUtf8Line() ?: break
 
                         when {
