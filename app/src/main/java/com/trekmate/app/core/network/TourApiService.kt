@@ -5,15 +5,15 @@ import retrofit2.http.*
 
 interface TourApiService {
 
-    @POST("tours")
+    @POST("exe/tours")
     suspend fun createTour(@Body request: CreateTourRequest): CreateTourResponse
 
-    @POST("tours/join")
+    @POST("exe/tours/join")
     suspend fun joinTour(@Body request: JoinTourRequest): JoinTourResponse
 
-    @POST("tours/end")
+    @POST("exe/tours/end")
     suspend fun endTour(@Body request: EndTourRequest): EndTourResponse
 
-    @GET("tours/{tourId}/members")
+    @GET("exe/tours/{tourId}/members")
     suspend fun getMembers(@Path("tourId") tourId: String): MemberListResponse
 }

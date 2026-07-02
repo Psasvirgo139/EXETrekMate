@@ -74,9 +74,9 @@ EXETREKMATE/
 - Không cần login/password
 
 #### Tour Lifecycle
-- **Leader tạo tour**: gọi API `POST /tours` → nhận `tourId`, `groupId`, `joinCode`, `qrPayload`
-- **Member tham gia**: nhập join code (`POST /tours/join`) hoặc scan QR
-- **Kết thúc tour**: Leader gọi `POST /tours/end` → xóa tour/member/BLE data local
+- **Leader tạo tour**: gọi API `POST /exe/tours` → nhận `tourId`, `groupId`, `joinCode`, `qrPayload`
+- **Member tham gia**: nhập join code (`POST /exe/tours/join`) hoặc scan QR
+- **Kết thúc tour**: Leader gọi `POST /exe/tours/end` → xóa tour/member/BLE data local
 - Lưu toàn bộ state vào Room Database
 
 #### QR Code
@@ -187,10 +187,10 @@ App Android đang gọi các endpoint này (xem `TourApiService.kt`):
 
 | Method | Path | Request body | Response |
 |--------|------|-------------|----------|
-| `POST` | `/tours` | `{ "leader_id": "..." }` | `{ "tour_id", "group_id", "join_code", "qr_payload", "leader_id" }` |
-| `POST` | `/tours/join` | `{ "user_id": "...", "join_code": "..." }` | `{ "tour_id", "group_id", "leader_id", "join_code", "qr_payload", "members": [...] }` |
-| `POST` | `/tours/end` | `{ "tour_id": "...", "leader_id": "..." }` | `{ "success": true }` |
-| `GET` | `/tours/{tourId}/members` | — | `{ "members": [{ "user_id", "is_leader" }] }` |
+| `POST` | `/exe/tours` | `{ "leader_id": "..." }` | `{ "tour_id", "group_id", "join_code", "qr_payload", "leader_id" }` |
+| `POST` | `/exe/tours/join` | `{ "user_id": "...", "join_code": "..." }` | `{ "tour_id", "group_id", "leader_id", "join_code", "qr_payload", "members": [...] }` |
+| `POST` | `/exe/tours/end` | `{ "tour_id": "...", "leader_id": "..." }` | `{ "success": true }` |
+| `GET` | `/exe/tours/{tourId}/members` | — | `{ "members": [{ "user_id", "is_leader" }] }` |
 
 > Nếu chưa có backend, có thể dùng **mock server** (ví dụ: MockWebServer, Postman Mock, json-server) để test luồng tour.
 
