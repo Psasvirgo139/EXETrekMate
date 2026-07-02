@@ -4,12 +4,9 @@ import android.annotation.SuppressLint
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
-import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
-import android.os.ParcelUuid
-import com.trekmate.app.core.ble.BleObservation
 import com.trekmate.app.core.ble.BlePacketConstants
 import com.trekmate.app.core.ble.BlePacketDecoder
 import com.trekmate.app.core.ble.PacketParseResult

@@ -36,9 +36,13 @@ class TrackingViewModel @Inject constructor(
     ) { tour, members, presence ->
         if (tour == null) return@combine null
 
+        val currentUserId = if (tour.role == TourRole.LEADER) {
+            tour.leaderId
+        } else {
+            members.firstOrNull { !it.isLeader }?.userId ?: return@combine null
+        }
         val input = LostDetectionInput(
-            currentUserId = tour.leaderId.takeIf { tour.role == TourRole.LEADER }
-                ?: members.firstOrNull { !it.isLeader }?.userId ?: return@combine null,
+            currentUserId = currentUserId,
             leaderId = tour.leaderId,
             role = tour.role,
             members = members.map { it.userId },

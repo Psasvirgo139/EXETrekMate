@@ -17,6 +17,7 @@ import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -109,18 +110,8 @@ class TrekMateBleService : Service() {
     }
 
     private suspend fun evaluateLost(userId: String, leaderId: String, role: TourRole) {
-        val members = tourRepository.observeMembers().let {
-            var snap = emptyList<com.trekmate.app.core.model.TourMember>()
-            it.collect { list -> snap = list; return@collect }
-            snap
-        }
-
-        val presenceList = mutableListOf<com.trekmate.app.core.model.MemberPresence>()
-        presenceRepository.observePresence().collect { list ->
-            presenceList.clear()
-            presenceList.addAll(list)
-            return@collect
-        }
+        val members = tourRepository.observeMembers().first()
+        val presenceList = presenceRepository.observePresence().first()
 
         val input = LostDetectionInput(
             currentUserId = userId,
