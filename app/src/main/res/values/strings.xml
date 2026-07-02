@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TrekMate</string>
+    <string name="notification_channel_tracking">Tracking</string>
+    <string name="notification_channel_lost">Lost Alert</string>
+    <string name="notification_tracking_title">TrekMate Active</string>
+    <string name="notification_tracking_text">Tour tracking is running</string>
+    <string name="notification_lost_leader_title">Possible Lost</string>
+    <string name="notification_lost_leader_text">You may have separated from your group leader</string>
+    <string name="notification_lost_members_title">Members Lost</string>
+</resources>
