@@ -6,6 +6,10 @@ import com.trekmate.app.core.model.MemberPresence
 import com.trekmate.app.core.model.TourRole
 import com.trekmate.app.core.time.ClockProvider
 import com.trekmate.app.feature.tour.TourRepository
+import com.trekmate.app.service.AdvertisingState
+import com.trekmate.app.service.BleAdvertiserController
+import com.trekmate.app.service.BleScannerController
+import com.trekmate.app.service.ScanningState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -23,7 +27,9 @@ class TrackingViewModel @Inject constructor(
     private val tourRepository: TourRepository,
     private val presenceRepository: PresenceRepository,
     private val lostDetectionEngine: LostDetectionEngine,
-    private val clock: ClockProvider
+    private val clock: ClockProvider,
+    private val advertiserController: BleAdvertiserController,
+    private val scannerController: BleScannerController
 ) : ViewModel() {
 
     val presenceList: StateFlow<List<MemberPresence>> = presenceRepository.observePresence()
@@ -51,4 +57,17 @@ class TrackingViewModel @Inject constructor(
         )
         lostDetectionEngine.evaluate(input)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    /** Live advertising state — shown in debug card on UI */
+    val advertisingState: StateFlow<AdvertisingState> = advertiserController.state
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), AdvertisingState.Idle)
+
+    /** Live scanning state — shown in debug card on UI */
+    val scanningState: StateFlow<ScanningState> = scannerController.state
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ScanningState.Idle)
+
+    /** Number of BLE packets accepted from same-group peers this session */
+    val scanHitCount: StateFlow<Int> = scannerController.scanHitCount
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 }
+

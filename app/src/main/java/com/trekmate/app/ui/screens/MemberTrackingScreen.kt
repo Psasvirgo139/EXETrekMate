@@ -28,6 +28,9 @@ fun MemberTrackingScreen(
     val members by tourViewModel.members.collectAsState()
     val presenceList by trackingViewModel.presenceList.collectAsState()
     val lostStatus by trackingViewModel.lostStatus.collectAsState()
+    val advertisingState by trackingViewModel.advertisingState.collectAsState()
+    val scanningState by trackingViewModel.scanningState.collectAsState()
+    val scanHitCount by trackingViewModel.scanHitCount.collectAsState()
     val isPossiblyLost = lostStatus?.isPossiblyLostFromLeader == true
 
     Scaffold(
@@ -57,6 +60,14 @@ fun MemberTrackingScreen(
                         Text("Leader: ${tour.leaderId}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                     }
                 }
+            }
+
+            item {
+                BleDebugCard(
+                    advertisingState = advertisingState,
+                    scanningState = scanningState,
+                    scanHitCount = scanHitCount
+                )
             }
 
             item {

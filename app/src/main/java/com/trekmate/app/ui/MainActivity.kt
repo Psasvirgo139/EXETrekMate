@@ -1,8 +1,13 @@
 package com.trekmate.app.ui
 
 import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -19,35 +24,75 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        private const val TAG = "TrekMatePermission"
+    }
+
     @Inject
     lateinit var qrRenderer: QrCodeRenderer
 
-    private val requiredPermissions: List<String>
-        get() = buildList {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                add(Manifest.permission.BLUETOOTH_SCAN)
-                add(Manifest.permission.BLUETOOTH_ADVERTISE)
-                add(Manifest.permission.BLUETOOTH_CONNECT)
-            } else {
-                add(Manifest.permission.BLUETOOTH)
-                add(Manifest.permission.BLUETOOTH_ADMIN)
-                add(Manifest.permission.ACCESS_FINE_LOCATION)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                add(Manifest.permission.POST_NOTIFICATIONS)
-            }
+    // BLE permissions (Nearby Devices group on Android 12+, or Bluetooth + Location on ≤11)
+    private val blePermissions: Array<String>
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            arrayOf(
+                Manifest.permission.BLUETOOTH_SCAN,
+                Manifest.permission.BLUETOOTH_ADVERTISE,
+                Manifest.permission.BLUETOOTH_CONNECT
+            )
+        } else {
+            arrayOf(
+                Manifest.permission.BLUETOOTH,
+                Manifest.permission.BLUETOOTH_ADMIN,
+                Manifest.permission.ACCESS_FINE_LOCATION
+            )
+        }
+
+    // Notification permission — separate group, must be requested AFTER BLE
+    private val notifPermissions: Array<String>
+        get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            emptyArray()
         }
 
     private var missingPermissions by mutableStateOf<List<String>>(emptyList())
+    var openAppSettings: () -> Unit = {}
 
-    private val permissionLauncher = registerForActivityResult(
+    // Step 2: After BLE group resolved, request Notifications
+    private val notifLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        missingPermissions = results.filterValues { !it }.keys.toList()
+        Log.d(TAG, "Notification permission result: $results")
+        refreshMissingPermissions()
+    }
+
+    // Step 1: Request BLE group first, then chain to notifications
+    private val bleLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        Log.d(TAG, "BLE permission result: $results")
+        // Chain: after BLE group resolved, request notifications if needed
+        val missingNotif = notifPermissions.filter { perm ->
+            checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missingNotif.isNotEmpty()) {
+            Log.d(TAG, "Launching notification permission request: $missingNotif")
+            notifLauncher.launch(missingNotif.toTypedArray())
+        } else {
+            refreshMissingPermissions()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        openAppSettings = {
+            startActivity(
+                Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                    data = Uri.fromParts("package", packageName, null)
+                }
+            )
+        }
 
         checkAndRequestPermissions()
 
@@ -58,7 +103,8 @@ class MainActivity : ComponentActivity() {
                     if (missing.isNotEmpty()) {
                         PermissionScreen(
                             missingPermissions = missing,
-                            onRequestPermissions = { permissionLauncher.launch(requiredPermissions.toTypedArray()) }
+                            onRequestPermissions = { checkAndRequestPermissions() },
+                            onOpenSettings = openAppSettings
                         )
                     } else {
                         TrekMateNavHost(qrRenderer = qrRenderer)
@@ -68,13 +114,41 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Re-check when user returns from Settings
+        refreshMissingPermissions()
+    }
+
     private fun checkAndRequestPermissions() {
-        val missing = requiredPermissions.filter { perm ->
-            checkSelfPermission(perm) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        val missingBle = blePermissions.filter { perm ->
+            checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
         }
-        if (missing.isNotEmpty()) {
-            missingPermissions = missing
-            permissionLauncher.launch(missing.toTypedArray())
+        val missingNotif = notifPermissions.filter { perm ->
+            checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
         }
+
+        refreshMissingPermissions()
+
+        when {
+            missingBle.isNotEmpty() -> {
+                Log.d(TAG, "Launching BLE permission request: $missingBle")
+                // bleLauncher callback will chain to notifLauncher automatically
+                bleLauncher.launch(missingBle.toTypedArray())
+            }
+            missingNotif.isNotEmpty() -> {
+                Log.d(TAG, "BLE already granted. Launching notification request: $missingNotif")
+                notifLauncher.launch(missingNotif.toTypedArray())
+            }
+            else -> Log.d(TAG, "All permissions already granted")
+        }
+    }
+
+    private fun refreshMissingPermissions() {
+        val allRequired = blePermissions.toList() + notifPermissions.toList()
+        missingPermissions = allRequired.filter { perm ->
+            checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
+        }
+        Log.d(TAG, "Missing permissions: $missingPermissions")
     }
 }

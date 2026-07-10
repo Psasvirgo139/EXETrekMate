@@ -34,6 +34,9 @@ fun LeaderDashboardScreen(
     val members by tourViewModel.members.collectAsState()
     val presenceList by trackingViewModel.presenceList.collectAsState()
     val lostStatus by trackingViewModel.lostStatus.collectAsState()
+    val advertisingState by trackingViewModel.advertisingState.collectAsState()
+    val scanningState by trackingViewModel.scanningState.collectAsState()
+    val scanHitCount by trackingViewModel.scanHitCount.collectAsState()
     var showEndDialog by remember { mutableStateOf(false) }
 
     if (showEndDialog) {
@@ -78,6 +81,14 @@ fun LeaderDashboardScreen(
 
             item {
                 TourInfoCard(tour = tour)
+            }
+
+            item {
+                BleDebugCard(
+                    advertisingState = advertisingState,
+                    scanningState = scanningState,
+                    scanHitCount = scanHitCount
+                )
             }
 
             item {
@@ -214,4 +225,66 @@ private fun formatMs(ms: Long?): String {
     if (ms == null) return "never"
     val secAgo = (System.currentTimeMillis() - ms) / 1000
     return "${secAgo}s ago"
+}
+
+/**
+ * Debug card showing BLE advertising/scanning runtime state.
+ * Visible directly on the dashboard — no LogCat needed.
+ */
+@Composable
+internal fun BleDebugCard(
+    advertisingState: AdvertisingState,
+    scanningState: ScanningState,
+    scanHitCount: Int
+) {
+    val advLabel = when (advertisingState) {
+        is AdvertisingState.Running  -> "Running ✓"
+        is AdvertisingState.Starting -> "Starting…"
+        is AdvertisingState.Failed   -> "Failed ✗"
+        is AdvertisingState.Stopped  -> "Stopped"
+        is AdvertisingState.Idle     -> "Idle"
+    }
+    val advColor = when (advertisingState) {
+        is AdvertisingState.Running  -> Color(0xFF2E7D32)
+        is AdvertisingState.Failed   -> MaterialTheme.colorScheme.error
+        else                         -> MaterialTheme.colorScheme.outline
+    }
+    val scanLabel = when (scanningState) {
+        is ScanningState.Running  -> "Running ✓"
+        is ScanningState.Starting -> "Starting…"
+        is ScanningState.Failed   -> "Failed ✗ — ${(scanningState as ScanningState.Failed).reason}"
+        is ScanningState.Stopped  -> "Stopped"
+        is ScanningState.Idle     -> "Idle"
+    }
+    val scanColor = when (scanningState) {
+        is ScanningState.Running -> Color(0xFF2E7D32)
+        is ScanningState.Failed  -> MaterialTheme.colorScheme.error
+        else                     -> MaterialTheme.colorScheme.outline
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                "BLE Debug",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Advertise:", style = MaterialTheme.typography.bodySmall)
+                Text(advLabel, style = MaterialTheme.typography.bodySmall, color = advColor, fontWeight = FontWeight.SemiBold)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Scan:", style = MaterialTheme.typography.bodySmall)
+                Text(scanLabel, style = MaterialTheme.typography.bodySmall, color = scanColor, fontWeight = FontWeight.SemiBold)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text("Packets received:", style = MaterialTheme.typography.bodySmall)
+                Text("$scanHitCount", style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold,
+                    color = if (scanHitCount > 0) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    }
 }

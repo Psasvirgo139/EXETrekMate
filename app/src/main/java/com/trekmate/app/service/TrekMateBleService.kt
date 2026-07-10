@@ -1,7 +1,11 @@
 package com.trekmate.app.service
 
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.IBinder
 import android.util.Log
 import com.trekmate.app.core.model.TourRole
@@ -34,12 +38,38 @@ class TrekMateBleService : Service() {
 
     private val serviceScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private var lostDetectionJob: Job? = null
+    private var bleObserveJob: Job? = null
 
     companion object {
         private const val TAG = "TrekMateBleService"
         const val ACTION_START = "com.trekmate.app.ACTION_START_BLE"
         const val ACTION_STOP = "com.trekmate.app.ACTION_STOP_BLE"
         private const val LOST_EVAL_INTERVAL_MS = 10_000L
+    }
+
+    /**
+     * Listens for Bluetooth on/off events.
+     * When BT turns OFF → scanner/advertiser hardware resets but state stays "Running".
+     * When BT turns ON  → restart BLE controllers so they pick up fresh hardware.
+     */
+    private val bluetoothStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.action != BluetoothAdapter.ACTION_STATE_CHANGED) return
+            val state = intent.getIntExtra(BluetoothAdapter.EXTRA_STATE, BluetoothAdapter.ERROR)
+            when (state) {
+                BluetoothAdapter.STATE_OFF -> {
+                    Log.w(TAG, "Bluetooth turned OFF — stopping BLE controllers")
+                    advertiserController.stop()
+                    scannerController.stop()
+                    lostDetectionJob?.cancel()
+                }
+                BluetoothAdapter.STATE_ON -> {
+                    Log.d(TAG, "Bluetooth turned ON — restarting BLE")
+                    // Re-trigger the observeTourState flow to restart BLE with current tour
+                    restartBleObserver()
+                }
+            }
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -50,6 +80,11 @@ class TrekMateBleService : Service() {
         startForeground(
             TrekMateNotificationManagerImpl.NOTIFICATION_ID_TRACKING,
             notificationManager.buildTrackingNotification()
+        )
+        // Register BT state receiver
+        registerReceiver(
+            bluetoothStateReceiver,
+            IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED)
         )
         observeTourState()
     }
@@ -63,16 +98,19 @@ class TrekMateBleService : Service() {
 
     override fun onDestroy() {
         Log.d(TAG, "Service destroyed")
+        try { unregisterReceiver(bluetoothStateReceiver) } catch (e: Exception) { /* ignore */ }
         advertiserController.stop()
         scannerController.stop()
         lostDetectionJob?.cancel()
+        bleObserveJob?.cancel()
         serviceScope.cancel()
         notificationManager.clearAll()
         super.onDestroy()
     }
 
     private fun observeTourState() {
-        serviceScope.launch {
+        bleObserveJob?.cancel()
+        bleObserveJob = serviceScope.launch {
             combine(
                 tourRepository.observeCurrentTour(),
                 authRepository.observeCurrentUser()
@@ -97,6 +135,11 @@ class TrekMateBleService : Service() {
                     startLostDetectionLoop(user.userId, tour.leaderId, tour.role)
                 }
         }
+    }
+
+    private fun restartBleObserver() {
+        // Re-run observeTourState to pick up fresh BT hardware
+        observeTourState()
     }
 
     private fun startLostDetectionLoop(userId: String, leaderId: String, role: TourRole) {
@@ -126,3 +169,4 @@ class TrekMateBleService : Service() {
         notificationManager.showLostWarning(result)
     }
 }
+
