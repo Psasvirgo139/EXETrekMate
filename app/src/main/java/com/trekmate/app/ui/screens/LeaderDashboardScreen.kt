@@ -21,8 +21,7 @@ import com.trekmate.app.feature.tour.TourViewModel
 import com.trekmate.app.feature.tracking.LostDetectionResult
 import com.trekmate.app.feature.tracking.TrackingViewModel
 import com.trekmate.app.feature.map.MapViewModel
-import com.trekmate.app.core.model.GpsState
-import com.trekmate.app.core.model.MapDownloadState
+import com.trekmate.app.feature.map.MapPrepState
 import com.trekmate.app.service.AdvertisingState
 import com.trekmate.app.service.ScanningState
 
@@ -42,8 +41,7 @@ fun LeaderDashboardScreen(
     val advertisingState by trackingViewModel.advertisingState.collectAsState()
     val scanningState by trackingViewModel.scanningState.collectAsState()
     val scanHitCount by trackingViewModel.scanHitCount.collectAsState()
-    val gpsState by mapViewModel.gpsState.collectAsState()
-    val mapDownloadState by mapViewModel.mapDownloadState.collectAsState()
+    val mapPrepState by mapViewModel.mapPrepState.collectAsState()
     var showEndDialog by remember { mutableStateOf(false) }
 
     if (showEndDialog) {
@@ -87,7 +85,7 @@ fun LeaderDashboardScreen(
                     .fillMaxSize()
                     .padding(horizontal = 16.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
-                contentPadding = PaddingValues(bottom = if (mapDownloadState !is MapDownloadState.Idle || gpsState !is GpsState.Idle) 200.dp else 16.dp)
+                contentPadding = PaddingValues(bottom = if (mapPrepState !is MapPrepState.Idle) 160.dp else 16.dp)
             ) {
             item { Spacer(Modifier.height(8.dp)) }
 
@@ -133,18 +131,9 @@ fun LeaderDashboardScreen(
             item { Spacer(Modifier.height(16.dp)) }
             } // end LazyColumn
 
-            // ── GpsStatusCard overlay ────────────────────────────────────
-            GpsStatusCard(
-                state = gpsState,
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(horizontal = 16.dp)
-                    .padding(bottom = if (mapDownloadState !is MapDownloadState.Idle) 120.dp else 16.dp)
-            )
-
-            // ── MapDownloadCard overlay ────────────────────────────────
-            MapDownloadCard(
-                state = mapDownloadState,
+            // ── MapPrepCard overlay (unified GPS + map download) ──────────
+            MapPrepCard(
+                state = mapPrepState,
                 onViewMap = onViewMap,
                 modifier = Modifier
                     .align(Alignment.BottomCenter)

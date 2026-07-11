@@ -18,21 +18,20 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Manages GPS acquisition independently from map download.
+ * Manages GPS acquisition and, on success, triggers [OfflineMapManager] to begin
+ * downloading the offline map centred on the obtained GPS coordinates.
  *
  * Lifecycle:
  *  - Tour appears → [GpsState.Acquiring] → try to get GPS fix (up to [MAX_ATTEMPTS] times)
- *  - On success   → [GpsState.Success] (terminal — stays until tour ends)
+ *  - On success   → [GpsState.Success] (terminal) → [OfflineMapManager.startDownload] called
  *  - On failure   → [GpsState.Failed]  (terminal — stays until tour ends)
- *  - Tour ends    → [GpsState.Idle]
- *
- * This is completely independent from [OfflineMapManager] — the two features
- * can be tested separately.
+ *  - Tour ends    → [GpsState.Idle] + [OfflineMapManager.cancelAndReset]
  */
 @Singleton
 class GpsManager @Inject constructor(
     private val locationProvider: LocationProvider,
-    private val tourRepository: TourRepository
+    private val tourRepository: TourRepository,
+    private val offlineMapManager: OfflineMapManager
 ) {
     companion object {
         private const val TAG = "TrekGpsManager"
@@ -71,6 +70,8 @@ class GpsManager @Inject constructor(
                             gpsJob?.cancel()
                             gpsJob = null
                             _state.value = GpsState.Idle
+                            // Also cancel any in-progress map download
+                            offlineMapManager.cancelAndReset()
                         }
                     }
                 }
@@ -97,6 +98,8 @@ class GpsManager @Inject constructor(
                 val (lat, lon) = locationProvider.getCurrentLocation()
                 Log.d(TAG, "GPS success: ($lat, $lon)")
                 _state.value = GpsState.Success(lat, lon)
+                // ── Trigger offline map download with real GPS coordinates ──
+                offlineMapManager.startDownload(lat, lon)
                 return  // Terminal success — stop retrying
             } catch (e: CancellationException) {
                 throw e  // Don't swallow coroutine cancellation

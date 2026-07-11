@@ -12,6 +12,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -28,10 +29,8 @@ import androidx.lifecycle.LifecycleOwner
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
 import com.mapbox.geojson.Point
-import com.trekmate.app.core.map.OfflineMapManager
-import com.trekmate.app.core.model.GpsState
-import com.trekmate.app.core.model.MapDownloadState
 import com.trekmate.app.core.model.MapStyle
+import com.trekmate.app.feature.map.MapPrepState
 import com.trekmate.app.feature.map.MapViewModel
 import androidx.compose.ui.viewinterop.AndroidView
 
@@ -55,9 +54,9 @@ fun MapScreen(
     val currentStyle by viewModel.currentStyle.collectAsState()
     val mapCenter by viewModel.mapCenter.collectAsState()
 
-    // Use fixed center from OfflineMapManager, fallback to hardcoded center
-    val centerLat = mapCenter?.first ?: OfflineMapManager.CENTER_LAT
-    val centerLon = mapCenter?.second ?: OfflineMapManager.CENTER_LON
+    // Use GPS-derived center from OfflineMapManager, fallback to 0.0 (will be set once GPS succeeds)
+    val centerLat = mapCenter?.first ?: 0.0
+    val centerLon = mapCenter?.second ?: 0.0
 
     Box(modifier = Modifier.fillMaxSize()) {
         MapboxMapView(
@@ -170,37 +169,42 @@ private fun MapboxMapView(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// GpsStatusCard — independent GPS acquisition status card
+// MapPrepCard — unified GPS + offline map download card
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Shows GPS acquisition status as a standalone card.
+ * Single card that covers the full preparation flow:
+ *   Acquiring GPS → GPS obtained + downloading map → map ready
  *
  * States:
- *  - [GpsState.Idle]       → hidden
- *  - [GpsState.Acquiring]  → spinner + "Đang lấy vị trí GPS..."
- *  - [GpsState.Success]    → green check + coordinates
- *  - [GpsState.Failed]     → red warning + error message
+ *  - [MapPrepState.Idle]          → hidden
+ *  - [MapPrepState.AcquiringGps]  → spinner + "Đang lấy vị trí GPS…"
+ *  - [MapPrepState.Downloading]   → GPS coords shown + progress bar
+ *  - [MapPrepState.Ready]         → "Xem Map" button
+ *  - [MapPrepState.GpsFailed]     → red warning + error message
+ *  - [MapPrepState.DownloadError] → red warning + error message
  */
 @Composable
-fun GpsStatusCard(
-    state: GpsState,
+fun MapPrepCard(
+    state: MapPrepState,
+    onViewMap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     AnimatedVisibility(
-        visible = state !is GpsState.Idle,
+        visible = state !is MapPrepState.Idle,
         enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
         exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
         modifier = modifier
     ) {
         Card(
             modifier = Modifier.fillMaxWidth(),
-            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             when (state) {
-                // ── Acquiring ────────────────────────────────────────────────
-                is GpsState.Acquiring -> {
+
+                // ── Acquiring GPS ────────────────────────────────────────────
+                is MapPrepState.AcquiringGps -> {
                     Row(
                         modifier = Modifier.padding(14.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -209,7 +213,7 @@ fun GpsStatusCard(
                         CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
                         Column {
                             Text(
-                                "Vị trí GPS",
+                                "Chuẩn bị bản đồ offline",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -222,122 +226,41 @@ fun GpsStatusCard(
                     }
                 }
 
-                // ── Success ──────────────────────────────────────────────────
-                is GpsState.Success -> {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = Color(0xFF2E7D32),
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Column {
-                            Text(
-                                "Vị trí GPS",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                "Lấy vị trí thành công ✓",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = Color(0xFF2E7D32)
-                            )
-                            Text(
-                                "${String.format("%.5f", state.lat)}, ${String.format("%.5f", state.lon)}",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                // ── Failed ───────────────────────────────────────────────────
-                is GpsState.Failed -> {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Icon(
-                            Icons.Default.Warning,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.error,
-                            modifier = Modifier.size(22.dp)
-                        )
-                        Column {
-                            Text(
-                                "Vị trí GPS — thất bại",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                            Text(
-                                state.message,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                is GpsState.Idle -> { /* hidden */ }
-            }
-        }
-    }
-}
-
-// ────────────────────────────────────────────────────────────────────────────
-// MapDownloadCard — independent map download progress card
-// ────────────────────────────────────────────────────────────────────────────
-
-/**
- * Shows map download progress and "Xem Map" button as a standalone card.
- * Uses hardcoded center coordinates — independent from GPS.
- *
- * States:
- *  - [MapDownloadState.Idle]        → hidden
- *  - [MapDownloadState.Downloading] → LinearProgressIndicator + stage label
- *  - [MapDownloadState.Ready]       → "Xem Map" button enabled
- *  - [MapDownloadState.Error]       → error message
- */
-@Composable
-fun MapDownloadCard(
-    state: MapDownloadState,
-    onViewMap: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    AnimatedVisibility(
-        visible = state !is MapDownloadState.Idle,
-        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
-        modifier = modifier
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-        ) {
-            when (state) {
-                // ── Downloading ───────────────────────────────────────────────
-                is MapDownloadState.Downloading -> {
+                // ── Downloading map ─────────────────────────────────────────
+                is MapPrepState.Downloading -> {
                     Column(
                         modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text(
-                                "Bản đồ offline",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            Column {
+                                Text(
+                                    "Chuẩn bị bản đồ offline",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                // GPS success indicator + coordinates
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Icon(
+                                        Icons.Default.CheckCircle,
+                                        contentDescription = null,
+                                        tint = Color(0xFF2E7D32),
+                                        modifier = Modifier.size(12.dp)
+                                    )
+                                    Text(
+                                        "GPS: ${String.format("%.4f", state.lat)}, ${String.format("%.4f", state.lon)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                }
+                            }
                             Text(
                                 "${(state.progress * 100).toInt()}%",
                                 style = MaterialTheme.typography.labelMedium,
@@ -357,8 +280,8 @@ fun MapDownloadCard(
                     }
                 }
 
-                // ── Ready ─────────────────────────────────────────────────────
-                is MapDownloadState.Ready -> {
+                // ── Ready ───────────────────────────────────────────────────
+                is MapPrepState.Ready -> {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -381,7 +304,7 @@ fun MapDownloadCard(
                         }
                         Button(onClick = onViewMap) {
                             Icon(
-                                Icons.Default.LocationOn,
+                                Icons.Default.Map,
                                 contentDescription = null,
                                 modifier = Modifier.size(16.dp)
                             )
@@ -391,8 +314,36 @@ fun MapDownloadCard(
                     }
                 }
 
-                // ── Error ─────────────────────────────────────────────────────
-                is MapDownloadState.Error -> {
+                // ── GPS Failed ──────────────────────────────────────────────
+                is MapPrepState.GpsFailed -> {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Column {
+                            Text(
+                                "Không lấy được vị trí GPS",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                state.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // ── Download Error ──────────────────────────────────────────
+                is MapPrepState.DownloadError -> {
                     Row(
                         modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -406,7 +357,7 @@ fun MapDownloadCard(
                         )
                         Column {
                             Text(
-                                "Bản đồ offline — lỗi",
+                                "Tải bản đồ offline — lỗi",
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.error
                             )
@@ -419,7 +370,7 @@ fun MapDownloadCard(
                     }
                 }
 
-                is MapDownloadState.Idle -> { /* hidden */ }
+                is MapPrepState.Idle -> { /* hidden */ }
             }
         }
     }

@@ -15,7 +15,6 @@ import com.mapbox.maps.StylePackLoadOptions              // com.mapbox.maps (NOT
 import com.mapbox.maps.TilesetDescriptorOptions          // com.mapbox.maps (NOT com.mapbox.common)
 import com.trekmate.app.core.model.MapDownloadState
 import com.trekmate.app.core.model.MapStyle
-import com.trekmate.app.feature.tour.TourRepository
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,7 +24,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -38,16 +36,17 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Manages Mapbox offline tile downloads — INDEPENDENT from GPS acquisition.
+ * Manages Mapbox offline tile downloads.
  *
- * Map center is hardcoded to [CENTER_LAT], [CENTER_LON] (Đà Nẵng area) for testing.
- * This allows the map download to be tested without depending on live GPS.
+ * Map center is provided at runtime via [startDownload] — taken from GPS coordinates
+ * obtained by [GpsManager]. This ensures the offline map is always centered on the
+ * actual tour location.
  *
  * Lifecycle:
- *  - Tour appears  → start download immediately with fixed center
- *  - Tour ends     → delete tile region + style packs (after 5 s grace period)
+ *  - [startDownload] called with GPS coords → download immediately
+ *  - Tour ends → delete tile region + style packs (after 5 s grace period)
  *
- * State is exposed via [state] StateFlow → drives [MapDownloadCard] UI.
+ * State is exposed via [state] StateFlow → drives the combined [MapPrepCard] UI.
  *
  * Mapbox Maps SDK v11 package note:
  *   OfflineManager, StylePackLoadOptions, GlyphsRasterizationMode, TilesetDescriptorOptions
@@ -57,18 +56,12 @@ import javax.inject.Singleton
  *   Value → com.mapbox.bindgen  (NOT com.mapbox.common)
  */
 @Singleton
-class OfflineMapManager @Inject constructor(
-    private val tourRepository: TourRepository
-) {
+class OfflineMapManager @Inject constructor() {
     companion object {
         private const val TAG = "TrekOfflineMap"
         private const val REGION_ID = "trek-offline-region"
 
-        // Fixed center for testing — Đà Nẵng area (15.962429, 108.261144)
-        const val CENTER_LAT = 18.663466
-        const val CENTER_LON = 138.549436
-
-        private const val RADIUS_KM = 1.0
+        private const val RADIUS_KM = 10.0   // 10 km offline map radius
         private const val MIN_ZOOM: Byte = 0
         private const val MAX_ZOOM: Byte = 16
     }
@@ -82,47 +75,17 @@ class OfflineMapManager @Inject constructor(
     private val offlineManager: OfflineManager by lazy { OfflineManager() }
     private val tileStore: TileStore by lazy { TileStore.create() }
 
-    private var activeTourId: String? = null
     private var downloadJob: Job? = null
-    /** 5-second grace period before treating tour-null as truly ended (handles WebSocket blips). */
-    private var tourNullJob: Job? = null
-
-    init {
-        scope.launch {
-            tourRepository.observeCurrentTour().collect { tour ->
-                if (tour != null) {
-                    tourNullJob?.cancel()
-                    tourNullJob = null
-
-                    if (activeTourId != tour.tourId) {
-                        activeTourId = tour.tourId
-                        downloadJob?.cancel()
-                        _state.value = MapDownloadState.Idle
-                        downloadJob = scope.launch { beginDownload() }
-                    }
-                    // Same tour re-emit → download already running/done, ignore
-                } else {
-                    if (activeTourId != null && tourNullJob == null) {
-                        Log.d(TAG, "Tour null — starting 5 s grace period")
-                        tourNullJob = scope.launch {
-                            delay(5_000L)
-                            activeTourId = null
-                            tourNullJob = null
-                            downloadJob?.cancel()
-                            downloadJob = null
-                            deleteRegion()
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     // ────────────────────────────────────────────────────────────────────────
-    // Download flow
+    // Public API
     // ────────────────────────────────────────────────────────────────────────
 
-    private suspend fun beginDownload() {
+    /**
+     * Start offline map download centered on [lat], [lon] (GPS-obtained coordinates).
+     * Safe to call multiple times — skips if already downloading or ready.
+     */
+    fun startDownload(lat: Double, lon: Double) {
         // Guard: don't restart if already in progress or done
         when (_state.value) {
             is MapDownloadState.Downloading,
@@ -133,16 +96,32 @@ class OfflineMapManager @Inject constructor(
             else -> { /* Idle or Error — proceed */ }
         }
 
+        downloadJob?.cancel()
+        downloadJob = scope.launch { beginDownload(lat, lon) }
+    }
+
+    /**
+     * Cancel any in-progress download and delete stored tiles.
+     * Called by [GpsManager] / tour lifecycle when the tour ends.
+     */
+    fun cancelAndReset() {
+        downloadJob?.cancel()
+        downloadJob = null
+        scope.launch { deleteRegion() }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Download flow
+    // ────────────────────────────────────────────────────────────────────────
+
+    private suspend fun beginDownload(lat: Double, lon: Double) {
         // *** Signal to UI immediately so the card appears, even before Mapbox API calls ***
-        // Without this, state stays Idle until the first progress callback fires (which may
-        // never happen if the download completes instantly from cache, or fails immediately).
         _state.value = MapDownloadState.Downloading(0f, "Đang khởi động tải bản đồ…")
-        Log.d(TAG, "Starting offline download — center ($CENTER_LAT, $CENTER_LON) radius ${RADIUS_KM}km zoom $MIN_ZOOM-$MAX_ZOOM")
+        Log.d(TAG, "Starting offline download — center ($lat, $lon) radius ${RADIUS_KM}km zoom $MIN_ZOOM-$MAX_ZOOM")
 
         try {
-            downloadAll(CENTER_LAT, CENTER_LON)
+            downloadAll(lat, lon)
         } catch (e: CancellationException) {
-            // Coroutine cancelled (tour changed/ended) — reset state cleanly
             Log.d(TAG, "Download cancelled (tour changed or ended)")
             _state.value = MapDownloadState.Idle
             throw e  // Rethrow so coroutine properly cancels
