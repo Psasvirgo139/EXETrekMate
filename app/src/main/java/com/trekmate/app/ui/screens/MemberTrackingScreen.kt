@@ -15,7 +15,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.trekmate.app.core.model.CurrentTour
-import com.trekmate.app.core.model.OfflineMapState
+import com.trekmate.app.core.model.GpsState
+import com.trekmate.app.core.model.MapDownloadState
 import com.trekmate.app.feature.map.MapViewModel
 import com.trekmate.app.feature.tour.TourViewModel
 import com.trekmate.app.feature.tracking.TrackingViewModel
@@ -35,7 +36,8 @@ fun MemberTrackingScreen(
     val advertisingState by trackingViewModel.advertisingState.collectAsState()
     val scanningState by trackingViewModel.scanningState.collectAsState()
     val scanHitCount by trackingViewModel.scanHitCount.collectAsState()
-    val offlineMapState by mapViewModel.offlineMapState.collectAsState()
+    val gpsState by mapViewModel.gpsState.collectAsState()
+    val mapDownloadState by mapViewModel.mapDownloadState.collectAsState()
     val isPossiblyLost = lostStatus?.isPossiblyLostFromLeader == true
 
     Scaffold(
@@ -53,7 +55,7 @@ fun MemberTrackingScreen(
                 .fillMaxSize()
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
-            contentPadding = PaddingValues(bottom = if (offlineMapState !is OfflineMapState.Idle) 120.dp else 16.dp)
+            contentPadding = PaddingValues(bottom = if (mapDownloadState !is MapDownloadState.Idle || gpsState !is GpsState.Idle) 200.dp else 16.dp)
         ) {
             item { Spacer(Modifier.height(8.dp)) }
 
@@ -99,9 +101,18 @@ fun MemberTrackingScreen(
             item { Spacer(Modifier.height(16.dp)) }
         } // end LazyColumn
 
+        // ── GpsStatusCard overlay ───────────────────────────────────────────
+        GpsStatusCard(
+            state = gpsState,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = if (mapDownloadState !is MapDownloadState.Idle) 120.dp else 16.dp)
+        )
+
         // ── MapDownloadCard overlay ─────────────────────────────────────────
         MapDownloadCard(
-            state = offlineMapState,
+            state = mapDownloadState,
             onViewMap = onViewMap,
             modifier = Modifier
                 .align(Alignment.BottomCenter)

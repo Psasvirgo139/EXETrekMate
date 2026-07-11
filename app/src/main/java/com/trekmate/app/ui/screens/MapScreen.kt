@@ -9,7 +9,10 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -24,12 +27,17 @@ import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
-import com.mapbox.maps.plugin.animation.camera
 import com.mapbox.geojson.Point
+import com.trekmate.app.core.map.OfflineMapManager
+import com.trekmate.app.core.model.GpsState
+import com.trekmate.app.core.model.MapDownloadState
 import com.trekmate.app.core.model.MapStyle
-import com.trekmate.app.core.model.OfflineMapState
 import com.trekmate.app.feature.map.MapViewModel
 import androidx.compose.ui.viewinterop.AndroidView
+
+// ────────────────────────────────────────────────────────────────────────────
+// MapScreen — full-screen Mapbox viewer
+// ────────────────────────────────────────────────────────────────────────────
 
 /**
  * Full-screen Mapbox map composable.
@@ -47,16 +55,19 @@ fun MapScreen(
     val currentStyle by viewModel.currentStyle.collectAsState()
     val mapCenter by viewModel.mapCenter.collectAsState()
 
+    // Use fixed center from OfflineMapManager, fallback to hardcoded center
+    val centerLat = mapCenter?.first ?: OfflineMapManager.CENTER_LAT
+    val centerLon = mapCenter?.second ?: OfflineMapManager.CENTER_LON
+
     Box(modifier = Modifier.fillMaxSize()) {
-        // ── Mapbox Map ──────────────────────────────────────────────────────
         MapboxMapView(
             styleUri = currentStyle.styleUri,
-            centerLat = mapCenter?.first ?: 21.0278,   // fallback: Hanoi
-            centerLon = mapCenter?.second ?: 105.8342,
+            centerLat = centerLat,
+            centerLon = centerLon,
             modifier = Modifier.fillMaxSize()
         )
 
-        // ── Style label chip (top center) ────────────────────────────────
+        // Style label chip (top center)
         Surface(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -74,7 +85,7 @@ fun MapScreen(
             )
         }
 
-        // ── Bottom FABs ──────────────────────────────────────────────────
+        // Bottom FABs
         Row(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -82,7 +93,6 @@ fun MapScreen(
                 .padding(horizontal = 20.dp, vertical = 28.dp),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            // Back button — bottom-left
             FloatingActionButton(
                 onClick = onBack,
                 containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
@@ -91,7 +101,6 @@ fun MapScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại")
             }
 
-            // Style toggle button — bottom-right
             ExtendedFloatingActionButton(
                 onClick = { viewModel.toggleStyle() },
                 icon = { Icon(Icons.Default.Layers, contentDescription = null) },
@@ -133,7 +142,6 @@ private fun MapboxMapView(
         }
     }
 
-    // Forward lifecycle events to MapView
     DisposableEffect(lifecycle) {
         val observer = object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = mapView.onStart()
@@ -144,7 +152,6 @@ private fun MapboxMapView(
         onDispose { lifecycle.removeObserver(observer) }
     }
 
-    // Load or switch style whenever styleUri changes
     LaunchedEffect(styleUri) {
         mapView.mapboxMap.loadStyle(styleUri) {
             mapView.mapboxMap.setCamera(
@@ -163,30 +170,148 @@ private fun MapboxMapView(
 }
 
 // ────────────────────────────────────────────────────────────────────────────
-// MapDownloadCard — overlaid at the bottom of tracking screens
+// GpsStatusCard — independent GPS acquisition status card
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Animated overlay card showing map download progress.
+ * Shows GPS acquisition status as a standalone card.
  *
  * States:
- *  - [OfflineMapState.GettingLocation]  → spinner + "Đang lấy vị trí GPS..."
- *  - [OfflineMapState.LocationFailed]   → warning + "Lấy vị trí thất bại, đang thử lại..."
- *  - [OfflineMapState.Downloading]      → LinearProgressIndicator + "Đang tải bản đồ X%"
- *  - [OfflineMapState.Ready]            → Button "Xem Map"
- *  - [OfflineMapState.Error]            → error text
- *  - [OfflineMapState.Idle]             → hidden
+ *  - [GpsState.Idle]       → hidden
+ *  - [GpsState.Acquiring]  → spinner + "Đang lấy vị trí GPS..."
+ *  - [GpsState.Success]    → green check + coordinates
+ *  - [GpsState.Failed]     → red warning + error message
+ */
+@Composable
+fun GpsStatusCard(
+    state: GpsState,
+    modifier: Modifier = Modifier
+) {
+    AnimatedVisibility(
+        visible = state !is GpsState.Idle,
+        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
+        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
+        modifier = modifier
+    ) {
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            elevation = CardDefaults.cardElevation(defaultElevation = 6.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            when (state) {
+                // ── Acquiring ────────────────────────────────────────────────
+                is GpsState.Acquiring -> {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                        Column {
+                            Text(
+                                "Vị trí GPS",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Đang lấy vị trí GPS…",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
+                    }
+                }
+
+                // ── Success ──────────────────────────────────────────────────
+                is GpsState.Success -> {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.CheckCircle,
+                            contentDescription = null,
+                            tint = Color(0xFF2E7D32),
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Column {
+                            Text(
+                                "Vị trí GPS",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Lấy vị trí thành công ✓",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = Color(0xFF2E7D32)
+                            )
+                            Text(
+                                "${String.format("%.5f", state.lat)}, ${String.format("%.5f", state.lon)}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                // ── Failed ───────────────────────────────────────────────────
+                is GpsState.Failed -> {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Column {
+                            Text(
+                                "Vị trí GPS — thất bại",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                state.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+
+                is GpsState.Idle -> { /* hidden */ }
+            }
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// MapDownloadCard — independent map download progress card
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Shows map download progress and "Xem Map" button as a standalone card.
+ * Uses hardcoded center coordinates — independent from GPS.
+ *
+ * States:
+ *  - [MapDownloadState.Idle]        → hidden
+ *  - [MapDownloadState.Downloading] → LinearProgressIndicator + stage label
+ *  - [MapDownloadState.Ready]       → "Xem Map" button enabled
+ *  - [MapDownloadState.Error]       → error message
  */
 @Composable
 fun MapDownloadCard(
-    state: OfflineMapState,
+    state: MapDownloadState,
     onViewMap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val isVisible = state !is OfflineMapState.Idle
-
     AnimatedVisibility(
-        visible = isVisible,
+        visible = state !is MapDownloadState.Idle,
         enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
         exit = slideOutVertically(targetOffsetY = { it }) + fadeOut(),
         modifier = modifier
@@ -197,58 +322,22 @@ fun MapDownloadCard(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
         ) {
             when (state) {
-                // ── Getting location ──────────────────────────────────────
-                is OfflineMapState.GettingLocation -> {
-                    Row(
-                        Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                // ── Downloading ───────────────────────────────────────────────
+                is MapDownloadState.Downloading -> {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.5.dp)
-                        Column {
-                            Text("Bản đồ offline", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Đang lấy vị trí GPS…", style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium)
-                        }
-                    }
-                }
-
-                // ── Location failed — retrying ────────────────────────────
-                is OfflineMapState.LocationFailed -> {
-                    Row(
-                        Modifier.padding(16.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(22.dp),
-                            strokeWidth = 2.5.dp,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                        Column {
-                            Text("Bản đồ offline", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text(
-                                "Lấy vị trí thất bại, đang thử lại… (${state.attempt}/${state.maxAttempts})",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = MaterialTheme.colorScheme.error
-                            )
-                        }
-                    }
-                }
-
-                // ── Downloading ───────────────────────────────────────────
-                is OfflineMapState.Downloading -> {
-                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween,
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Bản đồ offline", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                "Bản đồ offline",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                             Text(
                                 "${(state.progress * 100).toInt()}%",
                                 style = MaterialTheme.typography.labelMedium,
@@ -268,8 +357,8 @@ fun MapDownloadCard(
                     }
                 }
 
-                // ── Ready ─────────────────────────────────────────────────
-                is OfflineMapState.Ready -> {
+                // ── Ready ─────────────────────────────────────────────────────
+                is MapDownloadState.Ready -> {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -278,35 +367,59 @@ fun MapDownloadCard(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Column {
-                            Text("Bản đồ offline", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            Text("Đã tải xong ✓", style = MaterialTheme.typography.bodyMedium,
+                            Text(
+                                "Bản đồ offline",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                "Đã tải xong ✓",
+                                style = MaterialTheme.typography.bodyMedium,
                                 fontWeight = FontWeight.Medium,
-                                color = Color(0xFF2E7D32))
+                                color = Color(0xFF2E7D32)
+                            )
                         }
                         Button(onClick = onViewMap) {
+                            Icon(
+                                Icons.Default.LocationOn,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
                             Text("Xem Map")
                         }
                     }
                 }
 
-                // ── Error ─────────────────────────────────────────────────
-                is OfflineMapState.Error -> {
+                // ── Error ─────────────────────────────────────────────────────
+                is MapDownloadState.Error -> {
                     Row(
-                        Modifier.padding(16.dp),
+                        modifier = Modifier.padding(16.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)
                     ) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(22.dp)
+                        )
                         Column {
-                            Text("Bản đồ offline — lỗi", style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.error)
-                            Text(state.message, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(
+                                "Bản đồ offline — lỗi",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.error
+                            )
+                            Text(
+                                state.message,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
 
-                is OfflineMapState.Idle -> { /* animated away — not rendered */ }
+                is MapDownloadState.Idle -> { /* hidden */ }
             }
         }
     }

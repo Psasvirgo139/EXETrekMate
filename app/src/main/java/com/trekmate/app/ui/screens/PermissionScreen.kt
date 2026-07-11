@@ -21,7 +21,7 @@ private fun permissionFriendlyName(perm: String): String = when (perm) {
     Manifest.permission.BLUETOOTH_CONNECT   -> "Nearby Devices — Bluetooth Connect"
     Manifest.permission.BLUETOOTH           -> "Bluetooth"
     Manifest.permission.BLUETOOTH_ADMIN     -> "Bluetooth Admin"
-    Manifest.permission.ACCESS_FINE_LOCATION -> "Location (required for BLE on Android ≤ 11)"
+    Manifest.permission.ACCESS_FINE_LOCATION -> "Vị trí (GPS — tải bản đồ offline & BLE trên Android ≤ 11)"
     Manifest.permission.POST_NOTIFICATIONS  -> "Notifications (for lost-member alerts)"
     else -> perm.substringAfterLast('.')
 }

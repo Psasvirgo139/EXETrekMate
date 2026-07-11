@@ -1,6 +1,7 @@
 package com.trekmate.app.core.map
 
 import android.util.Log
+import com.mapbox.bindgen.Value
 import com.mapbox.common.Cancelable
 import com.mapbox.common.NetworkRestriction
 import com.mapbox.common.TileRegionLoadOptions
@@ -12,12 +13,13 @@ import com.mapbox.maps.GlyphsRasterizationMode           // com.mapbox.maps (NOT
 import com.mapbox.maps.OfflineManager                    // com.mapbox.maps (NOT .offline)
 import com.mapbox.maps.StylePackLoadOptions              // com.mapbox.maps (NOT .offline)
 import com.mapbox.maps.TilesetDescriptorOptions          // com.mapbox.maps (NOT com.mapbox.common)
-import com.mapbox.bindgen.Value                          // NOT com.mapbox.common.Value
+import com.trekmate.app.core.model.MapDownloadState
 import com.trekmate.app.core.model.MapStyle
-import com.trekmate.app.core.model.OfflineMapState
 import com.trekmate.app.feature.tour.TourRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
@@ -27,7 +29,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collect
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
@@ -37,58 +38,80 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 /**
- * Singleton that manages Mapbox offline tile downloads.
+ * Manages Mapbox offline tile downloads — INDEPENDENT from GPS acquisition.
  *
- * Lifecycle is automatically tied to the tour lifecycle:
- *  - tour appears  → get GPS → download [SATELLITE_STREETS + OUTDOORS] for 30km radius, zoom 0–16
- *  - tour disappears → delete tile region + style packs
+ * Map center is hardcoded to [CENTER_LAT], [CENTER_LON] (Đà Nẵng area) for testing.
+ * This allows the map download to be tested without depending on live GPS.
  *
- * Progress is exposed via [state] StateFlow for the UI.
+ * Lifecycle:
+ *  - Tour appears  → start download immediately with fixed center
+ *  - Tour ends     → delete tile region + style packs (after 5 s grace period)
  *
- * Package note (Mapbox Maps SDK v11.x):
+ * State is exposed via [state] StateFlow → drives [MapDownloadCard] UI.
+ *
+ * Mapbox Maps SDK v11 package note:
  *   OfflineManager, StylePackLoadOptions, GlyphsRasterizationMode, TilesetDescriptorOptions
- *   → all in com.mapbox.maps (NOT com.mapbox.maps.offline / NOT com.mapbox.common)
+ *   → com.mapbox.maps  (NOT com.mapbox.maps.offline / NOT com.mapbox.common)
  *   TileStore, TileRegionLoadOptions, TileRegionLoadProgress, NetworkRestriction, Cancelable
  *   → com.mapbox.common
+ *   Value → com.mapbox.bindgen  (NOT com.mapbox.common)
  */
 @Singleton
 class OfflineMapManager @Inject constructor(
-    private val locationProvider: LocationProvider,
     private val tourRepository: TourRepository
 ) {
     companion object {
         private const val TAG = "TrekOfflineMap"
         private const val REGION_ID = "trek-offline-region"
+
+        // Fixed center for testing — Đà Nẵng area (15.962429, 108.261144)
+        const val CENTER_LAT = 18.663466
+        const val CENTER_LON = 138.549436
+
         private const val RADIUS_KM = 30.0
         private const val MIN_ZOOM: Byte = 0
         private const val MAX_ZOOM: Byte = 16
-        private const val MAX_LOCATION_ATTEMPTS = 3
-        private const val LOCATION_RETRY_DELAY_MS = 10_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
-    private val _state = MutableStateFlow<OfflineMapState>(OfflineMapState.Idle)
-    val state: StateFlow<OfflineMapState> = _state.asStateFlow()
+    private val _state = MutableStateFlow<MapDownloadState>(MapDownloadState.Idle)
+    val state: StateFlow<MapDownloadState> = _state.asStateFlow()
 
     /** Lazy — created only after Mapbox token is set (via resValue string resource). */
     private val offlineManager: OfflineManager by lazy { OfflineManager() }
     private val tileStore: TileStore by lazy { TileStore.create() }
 
     private var activeTourId: String? = null
+    private var downloadJob: Job? = null
+    /** 5-second grace period before treating tour-null as truly ended (handles WebSocket blips). */
+    private var tourNullJob: Job? = null
 
     init {
         scope.launch {
-            tourRepository.observeCurrentTour().collectLatest { tour ->
+            tourRepository.observeCurrentTour().collect { tour ->
                 if (tour != null) {
+                    tourNullJob?.cancel()
+                    tourNullJob = null
+
                     if (activeTourId != tour.tourId) {
                         activeTourId = tour.tourId
-                        beginDownload()
+                        downloadJob?.cancel()
+                        _state.value = MapDownloadState.Idle
+                        downloadJob = scope.launch { beginDownload() }
                     }
+                    // Same tour re-emit → download already running/done, ignore
                 } else {
-                    if (activeTourId != null) {
-                        activeTourId = null
-                        deleteRegion()
+                    if (activeTourId != null && tourNullJob == null) {
+                        Log.d(TAG, "Tour null — starting 5 s grace period")
+                        tourNullJob = scope.launch {
+                            delay(5_000L)
+                            activeTourId = null
+                            tourNullJob = null
+                            downloadJob?.cancel()
+                            downloadJob = null
+                            deleteRegion()
+                        }
                     }
                 }
             }
@@ -100,45 +123,33 @@ class OfflineMapManager @Inject constructor(
     // ────────────────────────────────────────────────────────────────────────
 
     private suspend fun beginDownload() {
-        if (_state.value is OfflineMapState.Ready || _state.value is OfflineMapState.Downloading) {
-            Log.d(TAG, "Already downloading or ready — skipping")
-            return
+        // Guard: don't restart if already in progress or done
+        when (_state.value) {
+            is MapDownloadState.Downloading,
+            is MapDownloadState.Ready -> {
+                Log.d(TAG, "Download already in progress or ready — skipping")
+                return
+            }
+            else -> { /* Idle or Error — proceed */ }
         }
-        val (lat, lon) = acquireLocation() ?: return
+
+        Log.d(TAG, "Starting offline download — center ($CENTER_LAT, $CENTER_LON) radius ${RADIUS_KM}km zoom $MIN_ZOOM-$MAX_ZOOM")
+
         try {
-            downloadAll(lat, lon)
+            downloadAll(CENTER_LAT, CENTER_LON)
+        } catch (e: CancellationException) {
+            Log.d(TAG, "Download cancelled (tour changed or ended)")
+            throw e  // Don't swallow coroutine cancellation
         } catch (e: Exception) {
             Log.e(TAG, "Download failed: ${e.message}", e)
-            _state.value = OfflineMapState.Error("Tải bản đồ thất bại: ${e.message}")
+            _state.value = MapDownloadState.Error("Tải bản đồ thất bại: ${e.message}")
         }
-    }
-
-    /**
-     * Tries to get GPS up to [MAX_LOCATION_ATTEMPTS] times.
-     * Emits [OfflineMapState.GettingLocation] / [OfflineMapState.LocationFailed] while retrying.
-     */
-    private suspend fun acquireLocation(): Pair<Double, Double>? {
-        repeat(MAX_LOCATION_ATTEMPTS) { attempt ->
-            _state.value = if (attempt == 0) {
-                OfflineMapState.GettingLocation
-            } else {
-                OfflineMapState.LocationFailed(attempt, MAX_LOCATION_ATTEMPTS)
-            }
-            val result = locationProvider.getCurrentLocation()
-            if (result.isSuccess) return result.getOrThrow()
-            Log.w(TAG, "Location attempt ${attempt + 1}/$MAX_LOCATION_ATTEMPTS failed")
-            if (attempt < MAX_LOCATION_ATTEMPTS - 1) delay(LOCATION_RETRY_DELAY_MS)
-        }
-        _state.value = OfflineMapState.Error("Không lấy được vị trí sau $MAX_LOCATION_ATTEMPTS lần thử")
-        return null
     }
 
     private suspend fun downloadAll(lat: Double, lon: Double) {
-        Log.d(TAG, "Starting offline download — center ($lat, $lon) radius ${RADIUS_KM}km zoom $MIN_ZOOM-$MAX_ZOOM")
-
         // ── Stage 1: Satellite style pack (0 → 15%) ──────────────────────────
         loadStylePackFlow(MapStyle.SATELLITE_STREETS.styleUri).collect { p ->
-            _state.value = OfflineMapState.Downloading(
+            _state.value = MapDownloadState.Downloading(
                 progress = p * 0.15f,
                 stage = "Đang tải style vệ tinh… ${(p * 100).toInt()}%"
             )
@@ -146,7 +157,7 @@ class OfflineMapManager @Inject constructor(
 
         // ── Stage 2: Outdoors style pack (15 → 30%) ─────────────────────────
         loadStylePackFlow(MapStyle.OUTDOORS.styleUri).collect { p ->
-            _state.value = OfflineMapState.Downloading(
+            _state.value = MapDownloadState.Downloading(
                 progress = 0.15f + p * 0.15f,
                 stage = "Đang tải style địa hình… ${(p * 100).toInt()}%"
             )
@@ -179,14 +190,14 @@ class OfflineMapManager @Inject constructor(
             .build()
 
         downloadTileRegionFlow(REGION_ID, options).collect { p ->
-            _state.value = OfflineMapState.Downloading(
+            _state.value = MapDownloadState.Downloading(
                 progress = 0.30f + p * 0.70f,
                 stage = "Đang tải dữ liệu bản đồ… ${(p * 100).toInt()}%"
             )
         }
 
         Log.d(TAG, "Offline download complete")
-        _state.value = OfflineMapState.Ready(centerLat = lat, centerLon = lon)
+        _state.value = MapDownloadState.Ready(centerLat = lat, centerLon = lon)
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -208,7 +219,7 @@ class OfflineMapManager @Inject constructor(
         }.onFailure { e ->
             Log.w(TAG, "Error during region delete (harmless): ${e.message}")
         }
-        _state.value = OfflineMapState.Idle
+        _state.value = MapDownloadState.Idle
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -217,10 +228,9 @@ class OfflineMapManager @Inject constructor(
 
     private fun loadStylePackFlow(styleUri: String): Flow<Float> = callbackFlow {
         var cancelable: Cancelable? = null
-        // metadata() accepts HashMap<String, Value> in Mapbox Maps SDK v11
         val opts = StylePackLoadOptions.Builder()
             .glyphsRasterizationMode(GlyphsRasterizationMode.ALL_GLYPHS_RASTERIZED_LOCALLY)
-            .metadata(Value.valueOf("TrekMate"))  // metadata() expects Value? — NOT HashMap
+            .metadata(Value.valueOf("TrekMate"))
             .acceptExpired(true)
             .build()
 
@@ -267,10 +277,6 @@ class OfflineMapManager @Inject constructor(
     // Geometry helpers
     // ────────────────────────────────────────────────────────────────────────
 
-    /**
-     * Creates a rectangular bounding-box polygon approximating a circle
-     * of [radiusKm] km around ([lat], [lon]).
-     */
     private fun buildBoundingBoxPolygon(lat: Double, lon: Double, radiusKm: Double): Polygon {
         val deltaLat = radiusKm / 111.32
         val deltaLon = radiusKm / (111.32 * cos(lat * PI / 180.0))

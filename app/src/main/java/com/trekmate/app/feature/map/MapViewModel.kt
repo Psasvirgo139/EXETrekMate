@@ -2,9 +2,11 @@ package com.trekmate.app.feature.map
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.trekmate.app.core.map.GpsManager
 import com.trekmate.app.core.map.OfflineMapManager
+import com.trekmate.app.core.model.GpsState
+import com.trekmate.app.core.model.MapDownloadState
 import com.trekmate.app.core.model.MapStyle
-import com.trekmate.app.core.model.OfflineMapState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -16,21 +18,26 @@ import javax.inject.Inject
 
 @HiltViewModel
 class MapViewModel @Inject constructor(
+    private val gpsManager: GpsManager,
     private val offlineMapManager: OfflineMapManager
 ) : ViewModel() {
 
-    /** Live offline download state — drives the MapDownloadCard UI. */
-    val offlineMapState: StateFlow<OfflineMapState> = offlineMapManager.state
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), OfflineMapState.Idle)
+    /** GPS acquisition state — drives GpsStatusCard UI. */
+    val gpsState: StateFlow<GpsState> = gpsManager.state
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GpsState.Idle)
 
-    /** The current map style selected by the user. Persists as long as the ViewModel lives. */
+    /** Map download state — drives MapDownloadCard UI. */
+    val mapDownloadState: StateFlow<MapDownloadState> = offlineMapManager.state
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MapDownloadState.Idle)
+
+    /** The current map style selected by the user. */
     private val _currentStyle = MutableStateFlow(MapStyle.SATELLITE_STREETS)
     val currentStyle: StateFlow<MapStyle> = _currentStyle.asStateFlow()
 
-    /** Map center derived from the Ready state. Null until download completes. */
+    /** Map center: fixed coordinates from OfflineMapManager when download is ready. */
     val mapCenter: StateFlow<Pair<Double, Double>?> = offlineMapManager.state
         .map { state ->
-            (state as? OfflineMapState.Ready)?.let { Pair(it.centerLat, it.centerLon) }
+            (state as? MapDownloadState.Ready)?.let { Pair(it.centerLat, it.centerLon) }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
