@@ -21,17 +21,17 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.math.PI
 import kotlin.math.cos
 import javax.inject.Inject
@@ -153,41 +153,57 @@ class OfflineMapManager @Inject constructor(
     }
 
     private suspend fun downloadAll(lat: Double, lon: Double) {
+        val STAGE_TIMEOUT = 60_000L  // 60 s per stage; style packs can be slow on first run
+
         // ── Stage 1: Satellite style pack (0 → 15%) ──────────────────────────
-        loadStylePackFlow(MapStyle.SATELLITE_STREETS.styleUri).collect { p ->
-            _state.value = MapDownloadState.Downloading(
-                progress = p * 0.15f,
-                stage = "Đang tải style vệ tinh… ${(p * 100).toInt()}%"
-            )
+        _state.value = MapDownloadState.Downloading(0.01f, "Đang tải style vệ tinh…")
+        Log.d(TAG, "[Stage 1] loadStylePack SATELLITE_STREETS start")
+        val s1ok = withTimeoutOrNull(STAGE_TIMEOUT) {
+            loadStylePackSuspend(MapStyle.SATELLITE_STREETS.styleUri) { p ->
+                _state.value = MapDownloadState.Downloading(
+                    progress = p * 0.15f,
+                    stage = "Đang tải style vệ tinh… ${(p * 100).toInt()}%"
+                )
+            }
         }
+        if (s1ok == null) Log.w(TAG, "[Stage 1] TIMEOUT — continuing")
+        else Log.d(TAG, "[Stage 1] done")
 
         // ── Stage 2: Outdoors style pack (15 → 30%) ─────────────────────────
-        loadStylePackFlow(MapStyle.OUTDOORS.styleUri).collect { p ->
-            _state.value = MapDownloadState.Downloading(
-                progress = 0.15f + p * 0.15f,
-                stage = "Đang tải style địa hình… ${(p * 100).toInt()}%"
+        _state.value = MapDownloadState.Downloading(0.15f, "Đang tải style địa hình…")
+        Log.d(TAG, "[Stage 2] loadStylePack OUTDOORS start")
+        val s2ok = withTimeoutOrNull(STAGE_TIMEOUT) {
+            loadStylePackSuspend(MapStyle.OUTDOORS.styleUri) { p ->
+                _state.value = MapDownloadState.Downloading(
+                    progress = 0.15f + p * 0.15f,
+                    stage = "Đang tải style địa hình… ${(p * 100).toInt()}%"
+                )
+            }
+        }
+        if (s2ok == null) Log.w(TAG, "[Stage 2] TIMEOUT — continuing")
+        else Log.d(TAG, "[Stage 2] done")
+
+        // ── Stage 3: Tile region (30 → 100%) ────────────────────────────────
+        _state.value = MapDownloadState.Downloading(0.30f, "Đang tải dữ liệu bản đồ…")
+        val geometry = buildBoundingBoxPolygon(lat, lon, RADIUS_KM)
+        Log.d(TAG, "[Stage 3] loadTileRegion center=($lat,$lon) radius=${RADIUS_KM}km")
+
+        val descriptors = withContext(Dispatchers.Main) {
+            listOf(
+                offlineManager.createTilesetDescriptor(
+                    TilesetDescriptorOptions.Builder()
+                        .styleURI(MapStyle.SATELLITE_STREETS.styleUri)
+                        .minZoom(MIN_ZOOM).maxZoom(MAX_ZOOM).build()
+                ),
+                offlineManager.createTilesetDescriptor(
+                    TilesetDescriptorOptions.Builder()
+                        .styleURI(MapStyle.OUTDOORS.styleUri)
+                        .minZoom(MIN_ZOOM).maxZoom(MAX_ZOOM).build()
+                )
             )
         }
 
-        // ── Stage 3: Tile region (30 → 100%) ────────────────────────────────
-        val geometry = buildBoundingBoxPolygon(lat, lon, RADIUS_KM)
-        val descriptors = listOf(
-            offlineManager.createTilesetDescriptor(
-                TilesetDescriptorOptions.Builder()
-                    .styleURI(MapStyle.SATELLITE_STREETS.styleUri)
-                    .minZoom(MIN_ZOOM)
-                    .maxZoom(MAX_ZOOM)
-                    .build()
-            ),
-            offlineManager.createTilesetDescriptor(
-                TilesetDescriptorOptions.Builder()
-                    .styleURI(MapStyle.OUTDOORS.styleUri)
-                    .minZoom(MIN_ZOOM)
-                    .maxZoom(MAX_ZOOM)
-                    .build()
-            )
-        )
-        val options = TileRegionLoadOptions.Builder()
+        val tileOptions = TileRegionLoadOptions.Builder()
             .geometry(geometry)
             .descriptors(descriptors)
             .metadata(Value.valueOf("TrekMate offline region"))
@@ -195,12 +211,19 @@ class OfflineMapManager @Inject constructor(
             .networkRestriction(NetworkRestriction.NONE)
             .build()
 
-        downloadTileRegionFlow(REGION_ID, options).collect { p ->
-            _state.value = MapDownloadState.Downloading(
-                progress = 0.30f + p * 0.70f,
-                stage = "Đang tải dữ liệu bản đồ… ${(p * 100).toInt()}%"
-            )
+        val s3ok = withTimeoutOrNull(300_000L) {  // 5 min for tiles
+            downloadTileRegionSuspend(REGION_ID, tileOptions) { p ->
+                _state.value = MapDownloadState.Downloading(
+                    progress = 0.30f + p * 0.70f,
+                    stage = "Đang tải dữ liệu bản đồ… ${(p * 100).toInt()}%"
+                )
+            }
         }
+        if (s3ok == null) {
+            Log.e(TAG, "[Stage 3] TIMEOUT after 5 min")
+            throw Exception("Tải tile region timeout sau 5 phút")
+        }
+        Log.d(TAG, "[Stage 3] done")
 
         Log.d(TAG, "Offline download complete")
         _state.value = MapDownloadState.Ready(centerLat = lat, centerLon = lon)
@@ -216,11 +239,13 @@ class OfflineMapManager @Inject constructor(
             suspendCancellableCoroutine<Unit> { cont ->
                 tileStore.removeTileRegion(REGION_ID) { cont.resume(Unit) }
             }
-            suspendCancellableCoroutine<Unit> { cont ->
-                offlineManager.removeStylePack(MapStyle.SATELLITE_STREETS.styleUri) { cont.resume(Unit) }
-            }
-            suspendCancellableCoroutine<Unit> { cont ->
-                offlineManager.removeStylePack(MapStyle.OUTDOORS.styleUri) { cont.resume(Unit) }
+            withContext(Dispatchers.Main) {
+                suspendCancellableCoroutine<Unit> { cont ->
+                    offlineManager.removeStylePack(MapStyle.SATELLITE_STREETS.styleUri) { cont.resume(Unit) }
+                }
+                suspendCancellableCoroutine<Unit> { cont ->
+                    offlineManager.removeStylePack(MapStyle.OUTDOORS.styleUri) { cont.resume(Unit) }
+                }
             }
         }.onFailure { e ->
             Log.w(TAG, "Error during region delete (harmless): ${e.message}")
@@ -229,54 +254,84 @@ class OfflineMapManager @Inject constructor(
     }
 
     // ────────────────────────────────────────────────────────────────────────
-    // Flow helpers — convert callbacks to Flow<Float> (0f..1f)
+    // Suspend helpers — Mapbox callbacks dispatched on main thread
+    // withContext(Dispatchers.Main) ensures callbacks can be delivered
+    // even if the calling coroutine runs on Dispatchers.Default.
     // ────────────────────────────────────────────────────────────────────────
 
-    private fun loadStylePackFlow(styleUri: String): Flow<Float> = callbackFlow {
-        var cancelable: Cancelable? = null
-        val opts = StylePackLoadOptions.Builder()
-            .glyphsRasterizationMode(GlyphsRasterizationMode.ALL_GLYPHS_RASTERIZED_LOCALLY)
-            .metadata(Value.valueOf("TrekMate"))
-            .acceptExpired(true)
-            .build()
+    /**
+     * Downloads a Mapbox style pack and suspends until complete.
+     * [onProgress] is called with 0f…1f as resources are fetched.
+     */
+    private suspend fun loadStylePackSuspend(
+        styleUri: String,
+        onProgress: (Float) -> Unit
+    ) = withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine<Unit> { cont ->
+            val opts = StylePackLoadOptions.Builder()
+                .glyphsRasterizationMode(GlyphsRasterizationMode.ALL_GLYPHS_RASTERIZED_LOCALLY)
+                .metadata(Value.valueOf("TrekMate"))
+                .acceptExpired(true)
+                .build()
 
-        cancelable = offlineManager.loadStylePack(
-            styleUri,
-            opts,
-            { progress ->
-                val f = safeFraction(progress.completedResourceCount, progress.requiredResourceCount)
-                trySend(f)
+            Log.d(TAG, "loadStylePackSuspend: calling offlineManager.loadStylePack($styleUri)")
+            val cancelable = offlineManager.loadStylePack(
+                styleUri, opts,
+                { progress ->
+                    val f = safeFraction(progress.completedResourceCount, progress.requiredResourceCount)
+                    Log.v(TAG, "  stylePack progress: ${(f*100).toInt()}%")
+                    onProgress(f)
+                }
+            ) { expected ->
+                Log.d(TAG, "  stylePack completion: isValue=${expected.isValue} error=${expected.error}")
+                if (expected.isValue) {
+                    if (cont.isActive) cont.resume(Unit)
+                } else {
+                    if (cont.isActive) cont.resumeWithException(
+                        Exception("StylePack($styleUri) error: ${expected.error?.message}")
+                    )
+                }
             }
-        ) { expected ->
-            if (expected.isValue) {
-                trySend(1f); close()
-            } else {
-                close(Exception("StylePack error: ${expected.error?.message}"))
+            cont.invokeOnCancellation {
+                Log.d(TAG, "  stylePack cancelled")
+                cancelable.cancel()
             }
         }
-        awaitClose { cancelable?.cancel() }
     }
 
-    private fun downloadTileRegionFlow(
+    /**
+     * Downloads a Mapbox tile region and suspends until complete.
+     * [onProgress] is called with 0f…1f as tiles are downloaded.
+     */
+    private suspend fun downloadTileRegionSuspend(
         regionId: String,
-        options: TileRegionLoadOptions
-    ): Flow<Float> = callbackFlow {
-        var cancelable: Cancelable? = null
-        cancelable = tileStore.loadTileRegion(
-            regionId,
-            options,
-            { progress: TileRegionLoadProgress ->
-                val f = safeFraction(progress.completedResourceCount, progress.requiredResourceCount)
-                trySend(f)
+        options: TileRegionLoadOptions,
+        onProgress: (Float) -> Unit
+    ) = withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine<Unit> { cont ->
+            Log.d(TAG, "downloadTileRegionSuspend: calling tileStore.loadTileRegion($regionId)")
+            val cancelable = tileStore.loadTileRegion(
+                regionId, options,
+                { progress: TileRegionLoadProgress ->
+                    val f = safeFraction(progress.completedResourceCount, progress.requiredResourceCount)
+                    Log.v(TAG, "  tileRegion progress: ${(f*100).toInt()}% (${progress.completedResourceCount}/${progress.requiredResourceCount})")
+                    onProgress(f)
+                }
+            ) { expected ->
+                Log.d(TAG, "  tileRegion completion: isValue=${expected.isValue} error=${expected.error}")
+                if (expected.isValue) {
+                    if (cont.isActive) cont.resume(Unit)
+                } else {
+                    if (cont.isActive) cont.resumeWithException(
+                        Exception("TileRegion error: ${expected.error?.message}")
+                    )
+                }
             }
-        ) { expected ->
-            if (expected.isValue) {
-                trySend(1f); close()
-            } else {
-                close(Exception("TileRegion error: ${expected.error?.message}"))
+            cont.invokeOnCancellation {
+                Log.d(TAG, "  tileRegion cancelled")
+                cancelable.cancel()
             }
         }
-        awaitClose { cancelable?.cancel() }
     }
 
     // ────────────────────────────────────────────────────────────────────────
