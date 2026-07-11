@@ -68,7 +68,7 @@ class OfflineMapManager @Inject constructor(
         const val CENTER_LAT = 18.663466
         const val CENTER_LON = 138.549436
 
-        private const val RADIUS_KM = 30.0
+        private const val RADIUS_KM = 1.0
         private const val MIN_ZOOM: Byte = 0
         private const val MAX_ZOOM: Byte = 16
     }
@@ -133,13 +133,19 @@ class OfflineMapManager @Inject constructor(
             else -> { /* Idle or Error — proceed */ }
         }
 
+        // *** Signal to UI immediately so the card appears, even before Mapbox API calls ***
+        // Without this, state stays Idle until the first progress callback fires (which may
+        // never happen if the download completes instantly from cache, or fails immediately).
+        _state.value = MapDownloadState.Downloading(0f, "Đang khởi động tải bản đồ…")
         Log.d(TAG, "Starting offline download — center ($CENTER_LAT, $CENTER_LON) radius ${RADIUS_KM}km zoom $MIN_ZOOM-$MAX_ZOOM")
 
         try {
             downloadAll(CENTER_LAT, CENTER_LON)
         } catch (e: CancellationException) {
+            // Coroutine cancelled (tour changed/ended) — reset state cleanly
             Log.d(TAG, "Download cancelled (tour changed or ended)")
-            throw e  // Don't swallow coroutine cancellation
+            _state.value = MapDownloadState.Idle
+            throw e  // Rethrow so coroutine properly cancels
         } catch (e: Exception) {
             Log.e(TAG, "Download failed: ${e.message}", e)
             _state.value = MapDownloadState.Error("Tải bản đồ thất bại: ${e.message}")
