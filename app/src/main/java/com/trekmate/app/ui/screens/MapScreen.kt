@@ -61,7 +61,11 @@ fun MapScreen(
     // Read saved camera once at composition start (remembered for this composable lifetime).
     // null = first visit for this tour → MapboxMapView will center on GPS.
     // non-null = user navigated back → MapboxMapView restores their last pan/zoom.
-    val savedCamera = remember { viewModel.getSavedCamera() }
+    val savedCamera = remember {
+        val sc = viewModel.getSavedCamera()
+        android.util.Log.d("MapCamera", "MapScreen composed. Saved camera retrieved: $sc")
+        sc
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         MapboxMapView(
@@ -162,8 +166,11 @@ private fun MapboxMapView(
             //    visit to MapScreen can restore it exactly.
             try {
                 val cs = mapView.mapboxMap.cameraState
+                android.util.Log.d("MapCamera", "onDispose: Saving camera center=(${cs.center.latitude()}, ${cs.center.longitude()}) zoom=${cs.zoom}")
                 latestOnSaveCamera(cs.center.latitude(), cs.center.longitude(), cs.zoom)
-            } catch (_: Exception) { /* ignore if map not yet ready */ }
+            } catch (e: Exception) {
+                android.util.Log.w("MapCamera", "onDispose: Failed to save camera: ${e.message}", e)
+            }
 
             // 2. Stop rendering explicitly when the composable leaves composition.
             //    This frees the render thread immediately, making back-navigation fast.
@@ -178,6 +185,7 @@ private fun MapboxMapView(
     // MapScreen enters the back-stack, so it fires exactly once per visit.
     LaunchedEffect(Unit) {
         mapView.mapboxMap.loadStyle(styleUri) {
+            android.util.Log.d("MapCamera", "loadStyle complete callback. savedCamera=$savedCamera center=($latestCenterLat, $latestCenterLon)")
             val cameraOptions = when {
                 // Subsequent visit: restore user's last pan/zoom position.
                 savedCamera != null -> CameraOptions.Builder()
@@ -194,6 +202,7 @@ private fun MapboxMapView(
                 // GPS not yet available (shouldn't happen — button only shows when Ready).
                 else -> null
             }
+            android.util.Log.d("MapCamera", "Setting camera options: $cameraOptions")
             cameraOptions?.let { mapView.mapboxMap.setCamera(it) }
         }
     }

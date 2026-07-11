@@ -215,9 +215,9 @@ class OfflineMapManager @Inject constructor() {
             .geometry(geometry)
             .descriptors(descriptors)
             .metadata(Value.valueOf("TrekMate offline region"))
-            // acceptExpired(false): always fetch fresh tiles.
-            // Prevents Mapbox from reusing cached tiles from a previous tour area
-            // which would make the new download appear instant but show the old map.
+            // acceptExpired(false): don't serve tiles that have expired.
+            // Combined with a fresh currentRegionId, this forces Mapbox to verify
+            // each tile's validity rather than blindly serving the old region.
             .acceptExpired(false)
             .networkRestriction(NetworkRestriction.NONE)
             .build()
@@ -246,19 +246,26 @@ class OfflineMapManager @Inject constructor() {
 
     private suspend fun deleteRegion(regionId: String) {
         Log.d(TAG, "Deleting offline region: $regionId")
-        runCatching {
-            suspendCancellableCoroutine<Unit> { cont ->
-                tileStore.removeTileRegion(regionId) { cont.resume(Unit) }
-            }
-            withContext(Dispatchers.Main) {
+        // IMPORTANT: tileStore callbacks are dispatched on the
+        // main thread. Without withContext(Dispatchers.Main) the callbacks are NEVER
+        // delivered → suspendCancellableCoroutine hangs forever silently.
+        withContext(Dispatchers.Main) {
+            runCatching {
+                // Remove named tile region (frees tiles from offline anchor)
                 suspendCancellableCoroutine<Unit> { cont ->
-                    offlineManager.removeStylePack(MapStyle.OUTDOORS.styleUri) { cont.resume(Unit) }
+                    tileStore.removeTileRegion(regionId) { expected ->
+                        if (expected?.error != null) {
+                            Log.w(TAG, "removeTileRegion error: ${expected.error?.message}")
+                        }
+                        if (cont.isActive) cont.resume(Unit)
+                    }
                 }
+                Log.d(TAG, "  removeTileRegion done: $regionId")
+            }.onFailure { e ->
+                Log.w(TAG, "Error during region delete: ${e.message}")
             }
-        }.onFailure { e ->
-            Log.w(TAG, "Error during region delete (harmless): ${e.message}")
         }
-        Log.d(TAG, "Region deleted: $regionId")
+        Log.d(TAG, "Region delete complete: $regionId")
     }
 
     // ────────────────────────────────────────────────────────────────────────
