@@ -58,6 +58,12 @@ class GpsManager @Inject constructor(
                     if (activeTourId != tour.tourId) {
                         activeTourId = tour.tourId
                         gpsJob?.cancel()
+                        gpsJob = null
+                        // Reset both states immediately so guards don't block the new tour's
+                        // GPS acquisition and map download — even if the old tourNullJob was
+                        // cancelled before it had a chance to clean up.
+                        _state.value = GpsState.Idle
+                        offlineMapManager.cancelAndReset()
                         gpsJob = scope.launch { acquireGps() }
                     }
                     // Same tour re-emit → GPS already running/done, ignore

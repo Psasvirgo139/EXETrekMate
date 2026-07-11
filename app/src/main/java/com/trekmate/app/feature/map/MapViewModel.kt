@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import javax.inject.Inject
 
+// ── MapPrepState ──────────────────────────────────────────────────────────────
+
 /**
  * Combined state for the merged GPS + offline-map preparation card.
  *
@@ -27,37 +29,30 @@ import javax.inject.Inject
  *                                           → DownloadError(msg)
  */
 sealed interface MapPrepState {
-    /** No tour active — card is hidden. */
-    data object Idle : MapPrepState
-
-    /** Acquiring GPS fix. */
+    data object Idle         : MapPrepState
     data object AcquiringGps : MapPrepState
-
-    /**
-     * GPS succeeded, offline map download in progress.
-     * @param lat       GPS latitude (for display)
-     * @param lon       GPS longitude (for display)
-     * @param progress  0.0 … 1.0
-     * @param stage     human-readable stage label
-     */
-    data class Downloading(
-        val lat: Double,
-        val lon: Double,
-        val progress: Float,
-        val stage: String
-    ) : MapPrepState
-
-    /**
-     * GPS succeeded + map downloaded — "Xem Map" button shown.
-     */
+    data class Downloading(val lat: Double, val lon: Double, val progress: Float, val stage: String) : MapPrepState
     data class Ready(val lat: Double, val lon: Double) : MapPrepState
-
-    /** GPS acquisition failed (all retries exhausted). */
-    data class GpsFailed(val message: String) : MapPrepState
-
-    /** Map download failed. */
+    data class GpsFailed(val message: String)     : MapPrepState
     data class DownloadError(val message: String) : MapPrepState
 }
+
+// ── SavedCamera ───────────────────────────────────────────────────────────────
+
+/**
+ * Camera position saved when the user leaves [MapScreen].
+ *
+ * - null     → first visit for this tour → center on GPS coordinates
+ * - non-null → subsequent visit         → restore user's last pan/zoom position
+ *
+ * The underlying state lives in [OfflineMapManager] (a @Singleton), not in this
+ * ViewModel.  This is intentional: Compose Navigation creates a new ViewModel
+ * instance each time MapScreen is pushed onto the back-stack, but the singleton
+ * persists across the whole app lifetime.
+ */
+data class SavedCamera(val lat: Double, val lon: Double, val zoom: Double)
+
+// ── ViewModel ─────────────────────────────────────────────────────────────────
 
 @HiltViewModel
 class MapViewModel @Inject constructor(
@@ -65,17 +60,8 @@ class MapViewModel @Inject constructor(
     private val offlineMapManager: OfflineMapManager
 ) : ViewModel() {
 
-    /**
-     * Combined GPS + map-download state — drives the single [MapPrepCard] UI.
-     *
-     * Mapping rules:
-     *  - GPS Idle or (GPS Success + map Idle)  → MapPrepState.Idle
-     *  - GPS Acquiring                          → MapPrepState.AcquiringGps
-     *  - GPS Failed                             → MapPrepState.GpsFailed
-     *  - GPS Success + map Downloading          → MapPrepState.Downloading
-     *  - GPS Success + map Ready                → MapPrepState.Ready
-     *  - GPS Success + map Error                → MapPrepState.DownloadError
-     */
+    // ── Combined GPS + map-download state ─────────────────────────────────────
+
     val mapPrepState: StateFlow<MapPrepState> = combine(
         gpsManager.state,
         offlineMapManager.state
@@ -96,7 +82,7 @@ class MapViewModel @Inject constructor(
             gps is GpsState.Success && map is MapDownloadState.Error ->
                 MapPrepState.DownloadError(map.message)
 
-            // GPS succeeded but map not yet started (brief transient) → show Downloading(0%)
+            // GPS succeeded but map not yet started (brief transient)
             gps is GpsState.Success ->
                 MapPrepState.Downloading(gps.lat, gps.lon, 0f, "Đã lấy GPS, đang khởi động tải bản đồ…")
 
@@ -104,19 +90,49 @@ class MapViewModel @Inject constructor(
         }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MapPrepState.Idle)
 
-    /** The current map style selected by the user. */
-    private val _currentStyle = MutableStateFlow(MapStyle.SATELLITE_STREETS)
+    // ── Style (only OUTDOORS active — satellite commented out) ────────────────
+
+    private val _currentStyle = MutableStateFlow(MapStyle.OUTDOORS)
     val currentStyle: StateFlow<MapStyle> = _currentStyle.asStateFlow()
 
-    /** Map center: GPS coordinates when download is ready. */
+    // /** Toggle satellite ↔ outdoors. Re-enable when satellite offline is implemented. */
+    // fun toggleStyle() { _currentStyle.value = _currentStyle.value.next() }
+
+    // ── Map center (GPS coordinates once download is ready) ───────────────────
+
+    /**
+     * Eagerly shared so [MapScreen] gets the correct value immediately on first
+     * subscription — avoids the brief null→value race that would set camera to (0,0).
+     */
     val mapCenter: StateFlow<Pair<Double, Double>?> = offlineMapManager.state
         .map { state ->
             (state as? MapDownloadState.Ready)?.let { Pair(it.centerLat, it.centerLon) }
         }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
 
-    /** Cycle to the next map style (satellite ↔ outdoors). */
-    fun toggleStyle() {
-        _currentStyle.value = _currentStyle.value.next()
+    // ── Camera save/restore (delegated to OfflineMapManager singleton) ────────
+    //
+    // WHY singleton and not ViewModel field?
+    //   Compose Navigation creates a NEW MapViewModel instance each time the user
+    //   navigates to MapScreen (new back-stack entry → new ViewModelStore).
+    //   A field on the ViewModel would be lost on each navigation.
+    //   OfflineMapManager is @Singleton and lives for the app lifetime, so camera
+    //   state persists reliably across navigations within the same tour.
+
+    /**
+     * Returns the last saved camera position, or null on the first visit for this tour.
+     * Called by [MapScreen] once at composition start (wrapped in remember {}).
+     */
+    fun getSavedCamera(): SavedCamera? {
+        val t = offlineMapManager.getSavedCamera() ?: return null
+        return SavedCamera(t.first, t.second, t.third)
+    }
+
+    /**
+     * Called by [MapScreen]'s `DisposableEffect` when leaving the map view.
+     * Persists the user's current pan/zoom so it can be restored on the next visit.
+     */
+    fun saveCamera(lat: Double, lon: Double, zoom: Double) {
+        offlineMapManager.saveCamera(lat, lon, zoom)
     }
 }

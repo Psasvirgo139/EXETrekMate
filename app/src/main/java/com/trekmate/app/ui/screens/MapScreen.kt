@@ -32,6 +32,7 @@ import com.mapbox.geojson.Point
 import com.trekmate.app.core.model.MapStyle
 import com.trekmate.app.feature.map.MapPrepState
 import com.trekmate.app.feature.map.MapViewModel
+import com.trekmate.app.feature.map.SavedCamera
 import androidx.compose.ui.viewinterop.AndroidView
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -54,15 +55,21 @@ fun MapScreen(
     val currentStyle by viewModel.currentStyle.collectAsState()
     val mapCenter by viewModel.mapCenter.collectAsState()
 
-    // Use GPS-derived center from OfflineMapManager, fallback to 0.0 (will be set once GPS succeeds)
     val centerLat = mapCenter?.first ?: 0.0
     val centerLon = mapCenter?.second ?: 0.0
+
+    // Read saved camera once at composition start (remembered for this composable lifetime).
+    // null = first visit for this tour → MapboxMapView will center on GPS.
+    // non-null = user navigated back → MapboxMapView restores their last pan/zoom.
+    val savedCamera = remember { viewModel.getSavedCamera() }
 
     Box(modifier = Modifier.fillMaxSize()) {
         MapboxMapView(
             styleUri = currentStyle.styleUri,
             centerLat = centerLat,
             centerLon = centerLon,
+            savedCamera = savedCamera,
+            onSaveCamera = { lat, lon, zoom -> viewModel.saveCamera(lat, lon, zoom) },
             modifier = Modifier.fillMaxSize()
         )
 
@@ -100,20 +107,15 @@ fun MapScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Quay lại")
             }
 
-            ExtendedFloatingActionButton(
-                onClick = { viewModel.toggleStyle() },
-                icon = { Icon(Icons.Default.Layers, contentDescription = null) },
-                text = {
-                    Text(
-                        when (currentStyle) {
-                            MapStyle.SATELLITE_STREETS -> "Địa hình"
-                            MapStyle.OUTDOORS          -> "Vệ tinh"
-                        }
-                    )
-                },
-                containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f),
-                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-            )
+            // Style toggle — temporarily disabled (satellite raster tiles not suitable for offline).
+            // Re-enable when satellite offline support is implemented.
+            //
+            // ExtendedFloatingActionButton(
+            //     onClick = { viewModel.toggleStyle() },
+            //     icon = { Icon(Icons.Default.Layers, contentDescription = null) },
+            //     containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.92f),
+            //     contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+            // )
         }
     }
 }
@@ -127,10 +129,17 @@ private fun MapboxMapView(
     styleUri: String,
     centerLat: Double,
     centerLon: Double,
+    savedCamera: SavedCamera?,
+    onSaveCamera: (lat: Double, lon: Double, zoom: Double) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
+
+    // rememberUpdatedState ensures async callbacks (loadStyle) always read the latest values.
+    val latestCenterLat by rememberUpdatedState(centerLat)
+    val latestCenterLon by rememberUpdatedState(centerLon)
+    val latestOnSaveCamera by rememberUpdatedState(onSaveCamera)
 
     val mapView = remember {
         MapView(context).apply {
@@ -144,21 +153,48 @@ private fun MapboxMapView(
     DisposableEffect(lifecycle) {
         val observer = object : DefaultLifecycleObserver {
             override fun onStart(owner: LifecycleOwner) = mapView.onStart()
-            override fun onStop(owner: LifecycleOwner) = mapView.onStop()
+            override fun onStop(owner: LifecycleOwner)  = mapView.onStop()
             override fun onDestroy(owner: LifecycleOwner) { mapView.onDestroy() }
         }
         lifecycle.addObserver(observer)
-        onDispose { lifecycle.removeObserver(observer) }
+        onDispose {
+            // 1. Save the user's current camera position before leaving, so the next
+            //    visit to MapScreen can restore it exactly.
+            try {
+                val cs = mapView.mapboxMap.cameraState
+                latestOnSaveCamera(cs.center.latitude(), cs.center.longitude(), cs.zoom)
+            } catch (_: Exception) { /* ignore if map not yet ready */ }
+
+            // 2. Stop rendering explicitly when the composable leaves composition.
+            //    This frees the render thread immediately, making back-navigation fast.
+            mapView.onStop()
+
+            lifecycle.removeObserver(observer)
+        }
     }
 
-    LaunchedEffect(styleUri) {
+    // Load style + set initial camera — runs ONCE per composable instance.
+    // LaunchedEffect(Unit) is correct: a new instance is created each time
+    // MapScreen enters the back-stack, so it fires exactly once per visit.
+    LaunchedEffect(Unit) {
         mapView.mapboxMap.loadStyle(styleUri) {
-            mapView.mapboxMap.setCamera(
-                CameraOptions.Builder()
-                    .center(Point.fromLngLat(centerLon, centerLat))
+            val cameraOptions = when {
+                // Subsequent visit: restore user's last pan/zoom position.
+                savedCamera != null -> CameraOptions.Builder()
+                    .center(Point.fromLngLat(savedCamera.lon, savedCamera.lat))
+                    .zoom(savedCamera.zoom)
+                    .build()
+
+                // First visit for this tour: center on GPS coordinates.
+                latestCenterLat != 0.0 || latestCenterLon != 0.0 -> CameraOptions.Builder()
+                    .center(Point.fromLngLat(latestCenterLon, latestCenterLat))
                     .zoom(14.0)
                     .build()
-            )
+
+                // GPS not yet available (shouldn't happen — button only shows when Ready).
+                else -> null
+            }
+            cameraOptions?.let { mapView.mapboxMap.setCamera(it) }
         }
     }
 
@@ -167,6 +203,7 @@ private fun MapboxMapView(
         modifier = modifier
     )
 }
+
 
 // ────────────────────────────────────────────────────────────────────────────
 // MapPrepCard — unified GPS + offline map download card
