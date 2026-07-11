@@ -1,9 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.hilt.android)
     alias(libs.plugins.ksp)
+}
+
+// Read local.properties for API keys
+val localProps = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }
+        ?.inputStream()?.use { load(it) }
 }
 
 android {
@@ -20,6 +28,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "BASE_URL", "\"https://exetrekmatebe-1.onrender.com/\"")
+        // Mapbox reads token automatically from R.string.mapbox_access_token
+        resValue("string", "mapbox_access_token", localProps["MAPBOX_ACCESS_TOKEN"]?.toString() ?: "")
     }
 
     buildTypes {
@@ -96,6 +106,12 @@ dependencies {
     implementation(libs.camerax.camera2)
     implementation(libs.camerax.lifecycle)
     implementation(libs.camerax.view)
+
+    // Mapbox offline map
+    implementation(libs.mapbox.maps)
+
+    // Location (GPS for map center)
+    implementation(libs.play.services.location)
 
     // Tests
     testImplementation(libs.junit)

@@ -15,6 +15,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.trekmate.app.core.model.CurrentTour
+import com.trekmate.app.core.model.OfflineMapState
+import com.trekmate.app.feature.map.MapViewModel
 import com.trekmate.app.feature.tour.TourViewModel
 import com.trekmate.app.feature.tracking.TrackingViewModel
 
@@ -22,8 +24,10 @@ import com.trekmate.app.feature.tracking.TrackingViewModel
 @Composable
 fun MemberTrackingScreen(
     tour: CurrentTour,
+    onViewMap: () -> Unit,
     tourViewModel: TourViewModel = hiltViewModel(),
-    trackingViewModel: TrackingViewModel = hiltViewModel()
+    trackingViewModel: TrackingViewModel = hiltViewModel(),
+    mapViewModel: MapViewModel = hiltViewModel()
 ) {
     val members by tourViewModel.members.collectAsState()
     val presenceList by trackingViewModel.presenceList.collectAsState()
@@ -31,6 +35,7 @@ fun MemberTrackingScreen(
     val advertisingState by trackingViewModel.advertisingState.collectAsState()
     val scanningState by trackingViewModel.scanningState.collectAsState()
     val scanHitCount by trackingViewModel.scanHitCount.collectAsState()
+    val offlineMapState by mapViewModel.offlineMapState.collectAsState()
     val isPossiblyLost = lostStatus?.isPossiblyLostFromLeader == true
 
     Scaffold(
@@ -38,12 +43,17 @@ fun MemberTrackingScreen(
             TopAppBar(title = { Text("Group Tracking") })
         }
     ) { padding ->
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+        ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
                 .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+            contentPadding = PaddingValues(bottom = if (offlineMapState !is OfflineMapState.Idle) 120.dp else 16.dp)
         ) {
             item { Spacer(Modifier.height(8.dp)) }
 
@@ -87,7 +97,18 @@ fun MemberTrackingScreen(
             }
 
             item { Spacer(Modifier.height(16.dp)) }
-        }
+        } // end LazyColumn
+
+        // ── MapDownloadCard overlay ─────────────────────────────────────────
+        MapDownloadCard(
+            state = offlineMapState,
+            onViewMap = onViewMap,
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 16.dp)
+        )
+        } // end Box
     }
 }
 

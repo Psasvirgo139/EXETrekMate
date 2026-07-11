@@ -20,6 +20,8 @@ import com.trekmate.app.core.model.MemberPresence
 import com.trekmate.app.feature.tour.TourViewModel
 import com.trekmate.app.feature.tracking.LostDetectionResult
 import com.trekmate.app.feature.tracking.TrackingViewModel
+import com.trekmate.app.feature.map.MapViewModel
+import com.trekmate.app.core.model.OfflineMapState
 import com.trekmate.app.service.AdvertisingState
 import com.trekmate.app.service.ScanningState
 
@@ -28,8 +30,10 @@ import com.trekmate.app.service.ScanningState
 fun LeaderDashboardScreen(
     tour: CurrentTour,
     onEndTour: () -> Unit,
+    onViewMap: () -> Unit,
     tourViewModel: TourViewModel = hiltViewModel(),
-    trackingViewModel: TrackingViewModel = hiltViewModel()
+    trackingViewModel: TrackingViewModel = hiltViewModel(),
+    mapViewModel: MapViewModel = hiltViewModel()
 ) {
     val members by tourViewModel.members.collectAsState()
     val presenceList by trackingViewModel.presenceList.collectAsState()
@@ -37,6 +41,7 @@ fun LeaderDashboardScreen(
     val advertisingState by trackingViewModel.advertisingState.collectAsState()
     val scanningState by trackingViewModel.scanningState.collectAsState()
     val scanHitCount by trackingViewModel.scanHitCount.collectAsState()
+    val offlineMapState by mapViewModel.offlineMapState.collectAsState()
     var showEndDialog by remember { mutableStateOf(false) }
 
     if (showEndDialog) {
@@ -70,18 +75,21 @@ fun LeaderDashboardScreen(
             )
         }
     ) { padding ->
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .padding(horizontal = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                contentPadding = PaddingValues(bottom = if (offlineMapState !is OfflineMapState.Idle) 120.dp else 16.dp)
+            ) {
             item { Spacer(Modifier.height(8.dp)) }
 
-            item {
-                TourInfoCard(tour = tour)
-            }
+            item { TourInfoCard(tour = tour) }
 
             item {
                 BleDebugCard(
@@ -121,7 +129,18 @@ fun LeaderDashboardScreen(
             }
 
             item { Spacer(Modifier.height(16.dp)) }
-        }
+            } // end LazyColumn
+
+            // ── MapDownloadCard overlay ─────────────────────────────────
+            MapDownloadCard(
+                state = offlineMapState,
+                onViewMap = onViewMap,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 16.dp)
+                    .padding(bottom = 16.dp)
+            )
+        } // end Box
     }
 }
 

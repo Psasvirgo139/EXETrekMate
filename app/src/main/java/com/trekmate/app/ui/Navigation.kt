@@ -20,6 +20,7 @@ sealed class Screen(val route: String) {
     data object JoinByQr : Screen("join_qr")
     data object LeaderDashboard : Screen("leader_dashboard")
     data object MemberTracking : Screen("member_tracking")
+    data object Map : Screen("map")
 }
 
 @Composable
@@ -106,13 +107,21 @@ fun TrekMateNavHost(
                     navController.navigate(Screen.Home.route) {
                         popUpTo(0) { inclusive = true }
                     }
-                }
+                },
+                onViewMap = { navController.navigate(Screen.Map.route) }
             )
         }
 
         composable(Screen.MemberTracking.route) {
             val tour = currentTour ?: return@composable
-            MemberTrackingScreen(tour = tour)
+            MemberTrackingScreen(
+                tour = tour,
+                onViewMap = { navController.navigate(Screen.Map.route) }
+            )
+        }
+
+        composable(Screen.Map.route) {
+            MapScreen(onBack = { navController.popBackStack() })
         }
     }
 }
