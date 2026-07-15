@@ -47,6 +47,10 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+    // Location permission — needed for GPS map feature on all Android versions
+    private val locationPermissions: Array<String>
+        get() = arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+
     // Notification permission — separate group, must be requested AFTER BLE
     private val notifPermissions: Array<String>
         get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -58,7 +62,7 @@ class MainActivity : ComponentActivity() {
     private var missingPermissions by mutableStateOf<List<String>>(emptyList())
     var openAppSettings: () -> Unit = {}
 
-    // Step 2: After BLE group resolved, request Notifications
+    // Step 3: After notifications resolved → done
     private val notifLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
@@ -66,12 +70,11 @@ class MainActivity : ComponentActivity() {
         refreshMissingPermissions()
     }
 
-    // Step 1: Request BLE group first, then chain to notifications
-    private val bleLauncher = registerForActivityResult(
+    // Step 2: After BLE group resolved → request Location
+    private val locationLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { results ->
-        Log.d(TAG, "BLE permission result: $results")
-        // Chain: after BLE group resolved, request notifications if needed
+        Log.d(TAG, "Location permission result: $results")
         val missingNotif = notifPermissions.filter { perm ->
             checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
         }
@@ -80,6 +83,30 @@ class MainActivity : ComponentActivity() {
             notifLauncher.launch(missingNotif.toTypedArray())
         } else {
             refreshMissingPermissions()
+        }
+    }
+
+    // Step 1: Request BLE group first, then chain to Location
+    private val bleLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        Log.d(TAG, "BLE permission result: $results")
+        // Chain: after BLE → request Location if needed
+        val missingLoc = locationPermissions.filter { perm ->
+            checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missingLoc.isNotEmpty()) {
+            Log.d(TAG, "Launching location permission request: $missingLoc")
+            locationLauncher.launch(missingLoc.toTypedArray())
+        } else {
+            val missingNotif = notifPermissions.filter { perm ->
+                checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
+            }
+            if (missingNotif.isNotEmpty()) {
+                notifLauncher.launch(missingNotif.toTypedArray())
+            } else {
+                refreshMissingPermissions()
+            }
         }
     }
 
@@ -124,6 +151,9 @@ class MainActivity : ComponentActivity() {
         val missingBle = blePermissions.filter { perm ->
             checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
         }
+        val missingLoc = locationPermissions.filter { perm ->
+            checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
+        }
         val missingNotif = notifPermissions.filter { perm ->
             checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
         }
@@ -133,11 +163,15 @@ class MainActivity : ComponentActivity() {
         when {
             missingBle.isNotEmpty() -> {
                 Log.d(TAG, "Launching BLE permission request: $missingBle")
-                // bleLauncher callback will chain to notifLauncher automatically
+                // bleLauncher callback chains → locationLauncher → notifLauncher
                 bleLauncher.launch(missingBle.toTypedArray())
             }
+            missingLoc.isNotEmpty() -> {
+                Log.d(TAG, "BLE granted. Launching location request: $missingLoc")
+                locationLauncher.launch(missingLoc.toTypedArray())
+            }
             missingNotif.isNotEmpty() -> {
-                Log.d(TAG, "BLE already granted. Launching notification request: $missingNotif")
+                Log.d(TAG, "BLE+Location granted. Launching notification request: $missingNotif")
                 notifLauncher.launch(missingNotif.toTypedArray())
             }
             else -> Log.d(TAG, "All permissions already granted")
@@ -145,7 +179,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun refreshMissingPermissions() {
-        val allRequired = blePermissions.toList() + notifPermissions.toList()
+        val allRequired = blePermissions.toList() + locationPermissions.toList() + notifPermissions.toList()
         missingPermissions = allRequired.filter { perm ->
             checkSelfPermission(perm) != PackageManager.PERMISSION_GRANTED
         }

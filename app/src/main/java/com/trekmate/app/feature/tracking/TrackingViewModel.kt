@@ -10,6 +10,7 @@ import com.trekmate.app.service.AdvertisingState
 import com.trekmate.app.service.BleAdvertiserController
 import com.trekmate.app.service.BleScannerController
 import com.trekmate.app.service.ScanningState
+import com.trekmate.app.feature.auth.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -29,8 +30,13 @@ class TrackingViewModel @Inject constructor(
     private val lostDetectionEngine: LostDetectionEngine,
     private val clock: ClockProvider,
     private val advertiserController: BleAdvertiserController,
-    private val scannerController: BleScannerController
+    private val scannerController: BleScannerController,
+    private val authRepository: AuthRepository
 ) : ViewModel() {
+
+    val currentUserId: StateFlow<String?> = authRepository.observeCurrentUser()
+        .map { it?.userId }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val presenceList: StateFlow<List<MemberPresence>> = presenceRepository.observePresence()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
@@ -38,17 +44,13 @@ class TrackingViewModel @Inject constructor(
     val lostStatus: StateFlow<LostDetectionResult?> = combine(
         tourRepository.observeCurrentTour(),
         tourRepository.observeMembers(),
-        presenceRepository.observePresence()
-    ) { tour, members, presence ->
-        if (tour == null) return@combine null
+        presenceRepository.observePresence(),
+        authRepository.observeCurrentUser()
+    ) { tour, members, presence, user ->
+        if (tour == null || user == null) return@combine null
 
-        val currentUserId = if (tour.role == TourRole.LEADER) {
-            tour.leaderId
-        } else {
-            members.firstOrNull { !it.isLeader }?.userId ?: return@combine null
-        }
         val input = LostDetectionInput(
-            currentUserId = currentUserId,
+            currentUserId = user.userId,
             leaderId = tour.leaderId,
             role = tour.role,
             members = members.map { it.userId },
