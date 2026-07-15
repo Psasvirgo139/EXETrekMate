@@ -36,6 +36,7 @@ fun MemberTrackingScreen(
     val scanningState by trackingViewModel.scanningState.collectAsState()
     val scanHitCount by trackingViewModel.scanHitCount.collectAsState()
     val mapPrepState by mapViewModel.mapPrepState.collectAsState()
+    val currentUserId by trackingViewModel.currentUserId.collectAsState()
     val isPossiblyLost = lostStatus?.isPossiblyLostFromLeader == true
 
     Scaffold(
@@ -80,13 +81,32 @@ fun MemberTrackingScreen(
                 )
             }
 
+            // Render current user profile (Tôi)
+            currentUserId?.let { myId ->
+                val isMeLeader = tour.leaderId == myId
+                item {
+                    MyProfileCard(
+                        userId = myId,
+                        isLeader = isMeLeader,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+                }
+            }
+
+            val otherMembers = members.filter { it.userId != currentUserId }
+
             item {
-                Text("Members (${members.size})", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+                Text(
+                    "Thành viên khác (${otherMembers.size})",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
             }
 
             val presenceMap = presenceList.associateBy { it.userId }
 
-            items(members) { member ->
+            items(otherMembers) { member ->
                 val presence = presenceMap[member.userId]
                 MemberRow(
                     userId = member.userId,

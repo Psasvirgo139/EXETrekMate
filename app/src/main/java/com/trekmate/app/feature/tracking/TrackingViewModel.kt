@@ -10,6 +10,7 @@ import com.trekmate.app.service.AdvertisingState
 import com.trekmate.app.service.BleAdvertiserController
 import com.trekmate.app.service.BleScannerController
 import com.trekmate.app.service.ScanningState
+import com.trekmate.app.feature.auth.AuthRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -29,8 +30,13 @@ class TrackingViewModel @Inject constructor(
     private val lostDetectionEngine: LostDetectionEngine,
     private val clock: ClockProvider,
     private val advertiserController: BleAdvertiserController,
-    private val scannerController: BleScannerController
+    private val scannerController: BleScannerController,
+    private val authRepository: AuthRepository
 ) : ViewModel() {
+
+    val currentUserId: StateFlow<String?> = authRepository.observeCurrentUser()
+        .map { it?.userId }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
 
     val presenceList: StateFlow<List<MemberPresence>> = presenceRepository.observePresence()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
