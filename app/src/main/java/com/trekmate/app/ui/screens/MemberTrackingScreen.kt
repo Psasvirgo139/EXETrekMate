@@ -5,6 +5,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -13,8 +14,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.trekmate.app.core.model.CurrentTour
+import com.trekmate.app.core.model.MemberPresence
 import com.trekmate.app.feature.map.MapPrepState
 import com.trekmate.app.feature.map.MapViewModel
 import com.trekmate.app.feature.tour.TourViewModel
@@ -55,8 +58,14 @@ fun MemberTrackingScreen(
         ) {
             item { Spacer(Modifier.height(8.dp)) }
 
+            val presenceMap = presenceList.associateBy { it.userId }
+            val leaderPresence = presenceMap[tour.leaderId]
+
             item {
-                StatusBanner(isPossiblyLost = isPossiblyLost)
+                StatusBanner(
+                    leaderId = tour.leaderId,
+                    leaderPresence = leaderPresence
+                )
             }
 
             item {
@@ -122,44 +131,90 @@ fun MemberTrackingScreen(
 }
 
 @Composable
-private fun StatusBanner(isPossiblyLost: Boolean) {
-    if (isPossiblyLost) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Row(
-                Modifier.padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error)
-                Column {
-                    Text(
-                        "Possible separation from leader",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                    Text(
-                        "No BLE signal from leader for over 60 seconds",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onErrorContainer
-                    )
-                }
-            }
+private fun StatusBanner(
+    leaderId: String,
+    leaderPresence: MemberPresence?
+) {
+    var secondsAgo by remember { mutableStateOf<Long?>(null) }
+
+    // Live ticker updating every 1s
+    LaunchedEffect(leaderPresence?.lastSeenAt) {
+        val lastSeen = leaderPresence?.lastSeenAt
+        if (lastSeen == null) {
+            secondsAgo = null
+            return@LaunchedEffect
         }
-    } else {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
-            modifier = Modifier.fillMaxWidth()
+        while (true) {
+            secondsAgo = (System.currentTimeMillis() - lastSeen) / 1000
+            delay(1000L)
+        }
+    }
+
+    val isLost = leaderPresence != null && leaderPresence.lastSeenAt != null && 
+                 (secondsAgo ?: 0L) >= 60L
+
+    val containerColor = when {
+        leaderPresence == null -> MaterialTheme.colorScheme.surfaceVariant
+        isLost -> MaterialTheme.colorScheme.errorContainer
+        else -> MaterialTheme.colorScheme.primaryContainer
+    }
+
+    val title = when {
+        leaderPresence == null -> "Đang kết nối…"
+        isLost -> "Cảnh báo: Có khả năng lạc đoàn!"
+        else -> "Đang kết nối an toàn"
+    }
+
+    val text = when {
+        leaderPresence == null -> "Đang tìm kiếm tín hiệu BLE từ Leader ($leaderId)…"
+        isLost -> "Mất tín hiệu từ Leader $leaderId được ${secondsAgo ?: 60} giây."
+        else -> {
+            val sec = secondsAgo ?: 0L
+            if (sec <= 0L) "Đang đi cùng Leader (vừa cập nhật)."
+            else "Đang nhận tín hiệu tốt từ Leader (lần cuối thấy: ${sec} giây trước)."
+        }
+    }
+
+    val icon = when {
+        leaderPresence == null -> Icons.Default.LocationOn
+        isLost -> Icons.Default.Warning
+        else -> Icons.Default.CheckCircle
+    }
+
+    val iconColor = when {
+        leaderPresence == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        isLost -> MaterialTheme.colorScheme.error
+        else -> MaterialTheme.colorScheme.primary
+    }
+
+    val textColor = when {
+        leaderPresence == null -> MaterialTheme.colorScheme.onSurfaceVariant
+        isLost -> MaterialTheme.colorScheme.onErrorContainer
+        else -> MaterialTheme.colorScheme.onPrimaryContainer
+    }
+
+    Card(
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Row(
-                Modifier.padding(12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Icon(Icons.Default.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                Text("Connected to group", color = MaterialTheme.colorScheme.onPrimaryContainer)
+            Icon(icon, contentDescription = null, tint = iconColor)
+            Column {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.Bold,
+                    color = textColor,
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    text = text,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = textColor.copy(alpha = 0.8f)
+                )
             }
         }
     }

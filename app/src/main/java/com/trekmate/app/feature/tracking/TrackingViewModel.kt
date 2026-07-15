@@ -44,17 +44,13 @@ class TrackingViewModel @Inject constructor(
     val lostStatus: StateFlow<LostDetectionResult?> = combine(
         tourRepository.observeCurrentTour(),
         tourRepository.observeMembers(),
-        presenceRepository.observePresence()
-    ) { tour, members, presence ->
-        if (tour == null) return@combine null
+        presenceRepository.observePresence(),
+        authRepository.observeCurrentUser()
+    ) { tour, members, presence, user ->
+        if (tour == null || user == null) return@combine null
 
-        val currentUserId = if (tour.role == TourRole.LEADER) {
-            tour.leaderId
-        } else {
-            members.firstOrNull { !it.isLeader }?.userId ?: return@combine null
-        }
         val input = LostDetectionInput(
-            currentUserId = currentUserId,
+            currentUserId = user.userId,
             leaderId = tour.leaderId,
             role = tour.role,
             members = members.map { it.userId },

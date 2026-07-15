@@ -29,11 +29,16 @@ class TrekMateNotificationManagerImpl @Inject constructor(
 
     private var lastLostResult: LostDetectionResult? = null
 
+    // Stateful tracking to detect transitions
+    private var wasMemberLost: Boolean = false
+    private var lastLeaderLostCount: Int = 0
+
     companion object {
         const val CHANNEL_TRACKING = "trekmate_tracking"
         const val CHANNEL_LOST = "trekmate_lost"
         const val NOTIFICATION_ID_TRACKING = 1001
         const val NOTIFICATION_ID_LOST = 1002
+        const val NOTIFICATION_ID_RECONNECTED = 1003
     }
 
     init {
@@ -68,37 +73,68 @@ class TrekMateNotificationManagerImpl @Inject constructor(
             .build()
 
     override fun showLostWarning(result: LostDetectionResult) {
-        if (result == lastLostResult) return
-        lastLostResult = result
-
         val isMemberLost = result.isPossiblyLostFromLeader
         val leaderLostCount = result.lostMembers.size
 
+        // Detect state transitions
+        val transitionedToSafe = (wasMemberLost || lastLeaderLostCount > 0) && (!isMemberLost && leaderLostCount == 0)
+        val transitionedToLost = (!wasMemberLost && lastLeaderLostCount == 0) && (isMemberLost || leaderLostCount > 0)
+        val lostCountChanged = leaderLostCount != lastLeaderLostCount
+
+        wasMemberLost = isMemberLost
+        lastLeaderLostCount = leaderLostCount
+
+        // 1. If everything is safe now
         if (!isMemberLost && leaderLostCount == 0) {
             clearLostWarning()
+            if (transitionedToSafe) {
+                // Post a positive "Reconnected" notification
+                showReconnectedNotification()
+            }
             return
         }
 
-        val (title, text) = when {
-            isMemberLost -> Pair(
-                context.getString(R.string.notification_lost_leader_title),
-                context.getString(R.string.notification_lost_leader_text)
-            )
-            else -> Pair(
-                context.getString(R.string.notification_lost_members_title),
-                "$leaderLostCount member(s) may be lost"
-            )
-        }
+        // 2. If lost, only notify/alert when there is a state change to avoid spamming alerts every loop
+        if (transitionedToLost || lostCountChanged || result != lastLostResult) {
+            lastLostResult = result
 
-        val notification = NotificationCompat.Builder(context, CHANNEL_LOST)
+            val (title, text) = when {
+                isMemberLost -> Pair(
+                    context.getString(R.string.notification_lost_leader_title),
+                    context.getString(R.string.notification_lost_leader_text)
+                )
+                else -> Pair(
+                    context.getString(R.string.notification_lost_members_title),
+                    "$leaderLostCount member(s) may be lost"
+                )
+            }
+
+            val notification = NotificationCompat.Builder(context, CHANNEL_LOST)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setSmallIcon(android.R.drawable.ic_dialog_alert)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(false)
+                .setOnlyAlertOnce(true) // Crucial: prevents continuous vibration/sound on updates
+                .build()
+
+            notificationManager.notify(NOTIFICATION_ID_LOST, notification)
+        }
+    }
+
+    private fun showReconnectedNotification() {
+        val title = "Reconnected"
+        val text = "You are back in group range."
+        val notification = NotificationCompat.Builder(context, CHANNEL_TRACKING)
             .setContentTitle(title)
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(false)
+            .setSmallIcon(android.R.drawable.ic_menu_mylocation)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)
+            .setTimeoutAfter(5000) // Dismisses itself after 5 seconds automatically
             .build()
 
-        notificationManager.notify(NOTIFICATION_ID_LOST, notification)
+        notificationManager.notify(NOTIFICATION_ID_RECONNECTED, notification)
     }
 
     override fun clearLostWarning() {
@@ -108,6 +144,8 @@ class TrekMateNotificationManagerImpl @Inject constructor(
 
     override fun clearAll() {
         lastLostResult = null
+        wasMemberLost = false
+        lastLeaderLostCount = 0
         notificationManager.cancelAll()
     }
 }
