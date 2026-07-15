@@ -29,6 +29,9 @@ import androidx.lifecycle.LifecycleOwner
 import com.mapbox.maps.CameraOptions
 import com.mapbox.maps.MapView
 import com.mapbox.geojson.Point
+import com.mapbox.maps.plugin.PuckBearing
+import com.mapbox.maps.plugin.locationcomponent.createDefault2DPuck
+import com.mapbox.maps.plugin.locationcomponent.location
 import com.trekmate.app.core.model.MapStyle
 import com.trekmate.app.feature.map.MapPrepState
 import com.trekmate.app.feature.map.MapViewModel
@@ -186,6 +189,19 @@ private fun MapboxMapView(
     LaunchedEffect(Unit) {
         mapView.mapboxMap.loadStyle(styleUri) {
             android.util.Log.d("MapCamera", "loadStyle complete callback. savedCamera=$savedCamera center=($latestCenterLat, $latestCenterLon)")
+
+            // Enable real-time GPS location component on the map.
+            // This is completely separate from the one-shot GPS map preparation.
+            // Under the hood, FusedLocationProvider falls back to hardware GPS sensors
+            // when cellular/Internet/SIM connection is completely lost, ensuring offline tracking.
+            mapView.location.updateSettings {
+                enabled = true
+                locationPuck = createDefault2DPuck(withBearing = true)
+                puckBearingEnabled = true
+                puckBearing = PuckBearing.HEADING
+                pulsingEnabled = true
+            }
+
             val cameraOptions = when {
                 // Subsequent visit: restore user's last pan/zoom position.
                 savedCamera != null -> CameraOptions.Builder()
